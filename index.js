@@ -172,7 +172,23 @@ module.exports = function (app) {
   const status = m => app.setPluginStatus?.(m)
 
   function dataDir() { return app.getDataDirPath?.() || path.join(process.cwd(), 'storm-intelligence-data') }
-  function vessel() { return { position: app.getSelfPath?.('navigation.position') || null, sog: app.getSelfPath?.('navigation.speedOverGround'), cog: app.getSelfPath?.('navigation.courseOverGroundTrue') } }
+  function vessel() {
+    return {
+      position:
+        app.getSelfPath?.('navigation.position.value') ??
+        app.getSelfPath?.('navigation.position') ??
+        null,
+      sog:
+        app.getSelfPath?.('navigation.speedOverGround.value') ??
+        app.getSelfPath?.('navigation.speedOverGround') ??
+        null,
+      cog:
+        app.getSelfPath?.('navigation.courseOverGroundTrue.value') ??
+        app.getSelfPath?.('navigation.courseOverGroundTrue') ??
+        null
+    }
+  }
+
   function getProvider(id) { const p = providers.get(id); if (!p) throw Object.assign(new Error(`Radar mosaic provider not enabled: ${id}`), { statusCode: 404 }); return p }
   function getProduct(provider, product) { const m = provider.products()[product]; if (!m) throw Object.assign(new Error(`Unsupported product ${provider.id}:${product}`), { statusCode: 404 }); return m }
 
