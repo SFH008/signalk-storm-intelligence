@@ -12,7 +12,55 @@ const API='/plugins/signalk-storm-intelligence',LIGHTNING_VISIBILITY_KEY='storm-
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function connectHost(){try{const h=await bus.connect();host.textContent=h.host||'plotter';if(bus.has('charts')){await bus.subscribe(['chart.**'],()=>refreshCharts());await refreshCharts()}else host.textContent+=' · no charts API';try{const r=await bus.call('state.get',{scope:'extension'});uiState={playbackSelections:{},opacity:{},hazardVisible:false,lightningVisible:false,lightningOpacity:.9,...(r?.values||{})}}catch{}const stored=localStorage.getItem(LIGHTNING_VISIBILITY_KEY);lightningDesired=stored===null?!!uiState.lightningVisible:stored==='true';uiState.lightningVisible=lightningDesired}catch(e){host.textContent='standalone';host.title=e.message}}
 async function saveState(){try{await bus.call('state.set',{scope:'extension',values:uiState})}catch{}}
-async function refreshCharts(){if(!bus.has('charts'))return;const r=await bus.call('chart.list');hostCharts=Array.isArray(r?.charts)?r.charts:[];renderProducts();renderHazardControls();renderLightningControls()}
+async function refreshCharts(){if(!bus.has('charts'))return;const r=await bus.call('chart.list');hostCharts=Array.isArray(r?.charts)?r.charts:[];await enforceWeatherLayerOrder();renderProducts();renderHazardControls();renderLightningControls()}
+
+function stormOverlayCharts(){
+  const overlays=snapshot?.overlays||[];
+  const ids=new Set();
+
+  for(const o of overlays){
+    for(const pair of frameCharts(o)){
+      if(pair?.chart?.id) ids.add(pair.chart.id)
+    }
+  }
+
+  return hostCharts.filter(c=>ids.has(c.id))
+}
+
+async function enforceWeatherLayerOrder(){
+  if(!bus.has('charts')||!snapshot)return;
+
+  const hazards=hazardCharts();
+  const lightning=lightningCharts();
+
+  const overlays=snapshot.overlays||[];
+
+  const radarIds=[];
+  const satelliteIds=[];
+
+  for(const o of overlays){
+    const pair=selectedPair(o);
+    if(!pair?.chart?.id)continue;
+
+    if(o.family==='satellite') satelliteIds.push(pair.chart.id);
+    else radarIds.push(pair.chart.id);
+  }
+
+  const order=[
+    ...hazards.map(c=>c.id),
+    ...lightning.map(c=>c.id),
+    ...radarIds,
+    ...satelliteIds
+  ];
+
+  if(order.length<2)return;
+
+  try{
+    await bus.call('chart.setOrder',{order});
+  }catch(e){
+    console.warn('Unable to set Storm Intelligence chart order:',e.message)
+  }
+}
 
 function hazardCharts(){return hostCharts.filter(c=>String(c.name||'').startsWith('Storm Intelligence · Storm cells'))}
 function lightningCharts(){return hostCharts.filter(c=>String(c.name||'').startsWith('Storm Intelligence · Lightning'))}
