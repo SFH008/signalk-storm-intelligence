@@ -121,3 +121,35 @@ test('EUMETSAT WMS URL uses Geo Colour and explicit observation time', () => {
   assert.equal(url.searchParams.get('bbox'), '-10,35,0,45')
   assert.equal(url.searchParams.get('time'), '2026-09-22T16:50:00.000Z')
 })
+
+test('EUMETSAT exposes MTG LI accumulated flash area raster product', () => {
+  assert.equal(
+    EUMETSAT_PRODUCTS.MTG_LI_AFA.layer,
+    'mtg_fd:li_afa'
+  )
+  assert.equal(EUMETSAT_PRODUCTS.MTG_LI_AFA.kind, 'raster')
+  assert.equal(EUMETSAT_PRODUCTS.MTG_LI_AFA.period, 'PT5M')
+  assert.equal(EUMETSAT_PRODUCTS.MTG_LI_AFA.units, null)
+  assert.equal(EUMETSAT_PRODUCTS.MTG_LI_AFA.raw, false)
+  assert.equal(EUMETSAT_PRODUCTS.MTG_LI_AFA.cells, false)
+})
+
+test('EUMETSAT WMS URL supports MTG LI AFA with explicit observation time', () => {
+  const p = new EumetsatProvider({
+    wmsBase: 'https://view.eumetsat.int/geoserver/wms'
+  })
+
+  const url = new URL(
+    p.wmsUrl(
+      'MTG_LI_AFA',
+      [-10, 35, 0, 45],
+      '2026-09-22T20:30:00.000Z'
+    )
+  )
+
+  assert.equal(url.searchParams.get('layers'), 'mtg_fd:li_afa')
+  assert.equal(url.searchParams.get('version'), '1.1.1')
+  assert.equal(url.searchParams.get('srs'), 'EPSG:4326')
+  assert.equal(url.searchParams.get('bbox'), '-10,35,0,45')
+  assert.equal(url.searchParams.get('time'), '2026-09-22T20:30:00.000Z')
+})
