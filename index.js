@@ -108,9 +108,10 @@ function chartRecord(pluginId, provider, product, cfg, slot = 0) {
     type: 'tilelayer', format: 'png', minzoom: Math.max(cfg.minZoom, Number.isFinite(m.minZoom) ? m.minZoom : cfg.minZoom), maxzoom: Math.min(cfg.maxZoom, Number.isFinite(m.maxZoom) ? m.maxZoom : cfg.maxZoom), bounds,
     url: `/stormintelligence/${pluginId}/tiles/${provider.id}/${product}/{z}/{x}/{y}.png${suffix}`,
     attribution: provider.attribution || provider.name,
-    provider: provider.id, product,
+    provider: provider.id, product, family: provider.family || 'radar',
     stormIntelligence: {
       apiVersion: '2.0-draft', provider: provider.id, product,
+      sourceFamily: provider.family || 'radar',
       temporal: m.temporal !== false, playbackSlot: slot, live: slot === 0,
       latest: `/plugins/${pluginId}/latest/${provider.id}/${product}`,
       timeline: `/plugins/${pluginId}/timeline/${provider.id}/${product}`,
@@ -394,7 +395,7 @@ module.exports = function (app) {
       const periodMs = isoDurationMs(overlay.latest?.period || overlay.playback?.period) || 5 * 60 * 1000
       const ageMs = Number.isFinite(latestMs) ? Math.max(0, now - latestMs) : null
       const stale = ageMs != null && ageMs > Math.max(periodMs * 3, 15 * 60 * 1000)
-      components.push(componentState(`radar:${overlay.key}`, `Radar · ${overlay.providerName} · ${overlay.name}`, overlay.latest?.error ? 'error' : stale ? 'warning' : 'healthy', { provider: overlay.provider, product: overlay.product, latest: overlay.latest, ageMs }))
+      components.push(componentState(`radar:${overlay.key}`, `${overlay.family === 'satellite' ? 'Satellite' : 'Radar'} · ${overlay.providerName} · ${overlay.name}`, overlay.latest?.error ? 'error' : stale ? 'warning' : 'healthy', { provider: overlay.provider, family: overlay.family || 'radar', product: overlay.product, latest: overlay.latest, ageMs }))
     }
     components.push(componentState('acquisition', 'Background acquisition', !cfg.backgroundEnabled ? 'disabled' : cfg.acquisitionTargets.length && Object.keys(lastAcquired).length === 0 ? 'waiting' : 'healthy', { targets: cfg.acquisitionTargets, lastAcquired, storage: status.acquisition?.storage || null }))
     components.push(componentState('prefetch', 'Offline prefetch', !cfg.prefetchEnabled ? 'disabled' : 'healthy', { targets: cfg.prefetchTargets, lastPrefetched, storage: status.prefetch?.storage || null }))
@@ -442,10 +443,10 @@ module.exports = function (app) {
           playback = { enabled: true, period: pf.period, latest: pf.latest, intervalMs: cfg.playbackIntervalMs, frames: pf.frames.map(f => ({ ...f, resourceId: playbackChartId(t.providerId, t.product, f.slot), name: playbackChartName(m.title, f.slot) })) }
         } catch (e) { playback = { enabled: true, frames: [], error: e.message } }
       }
-      return { key, provider: t.providerId, providerName: provider.name, product: t.product, name: m.title, resourceId, latest, playback }
+      return { key, provider: t.providerId, providerName: provider.name, family: provider.family || 'radar', product: t.product, name: m.title, resourceId, latest, playback }
     }))
     return {
-      providers: Object.fromEntries([...providers].map(([id, p]) => [id, { id, name: p.name, attribution: p.attribution || null }])),
+      providers: Object.fromEntries([...providers].map(([id, p]) => [id, { id, name: p.name, family: p.family || 'radar', attribution: p.attribution || null }])),
       products: cfg.displayLayers, overlays,
       acquisition: { enabled: cfg.backgroundEnabled, targets: cfg.acquisitionTargets, lastAcquired, storage: await storage?.stats() },
       prefetch: { enabled: cfg.prefetchEnabled, targets: cfg.prefetchTargets, radiusNm: cfg.prefetchRadiusNm, zooms: cfg.prefetchZooms, lastPrefetched, storage: await tileStore?.stats() },
@@ -748,7 +749,7 @@ module.exports = function (app) {
     pollSeconds: { title: 'Acquisition poll interval (seconds)', type: 'integer', minimum: 15, maximum: 3600, default: 60 },
     storageEnabled: { title: 'Store acquired products', type: 'boolean', default: true }, storageMaxMB: { title: 'Maximum archive storage (MB, 0 unlimited)', type: 'integer', minimum: 0, default: 1024 }, storageMaxAgeHours: { title: 'Maximum archive age (hours, 0 unlimited)', type: 'number', minimum: 0, default: 24 },
     prefetchEnabled: { title: 'Geographic radar prefetch/offline cache', type: 'boolean', default: true }, prefetchTargets: { title: 'Raster products to prefetch around own ship', type: 'array', uniqueItems: true, default: DEFAULTS.prefetchTargets, items: { type: 'string', enum: [...allRasterTargets] } }, prefetchRadiusNm: { title: 'Prefetch radius around own ship (NM)', type: 'number', minimum: 1, maximum: 500, default: 40 }, prefetchZooms: { title: 'Prefetch zoom levels', type: 'array', uniqueItems: true, default: DEFAULTS.prefetchZooms, items: { type: 'integer', minimum: 0, maximum: 22 } }, prefetchMaxTilesPerCycle: { title: 'Maximum tiles per prefetch cycle', type: 'integer', minimum: 1, maximum: 20000, default: 1024 }, prefetchConcurrency: { title: 'Concurrent upstream prefetch requests', type: 'integer', minimum: 1, maximum: 32, default: 6 }, prefetchStorageMaxMB: { title: 'Maximum rendered prefetch storage (MB, 0 unlimited)', type: 'integer', minimum: 0, default: 512 }, prefetchStorageMaxAgeHours: { title: 'Maximum rendered prefetch age (hours, 0 unlimited)', type: 'number', minimum: 0, default: 6 },
-    playbackEnabled: { title: 'Time-controlled radar playback charts', type: 'boolean', default: true }, playbackSlots: { title: 'Playback frame slots exposed to plotters', type: 'integer', minimum: 1, maximum: 72, default: 13 }, playbackTimelineMinutes: { title: 'Playback timeline lookback (minutes)', type: 'integer', minimum: 5, maximum: 1440, default: 180 }, playbackIntervalMs: { title: 'Freeboard animation interval (milliseconds)', type: 'integer', minimum: 250, maximum: 10000, default: 900 },
+    playbackEnabled: { title: 'Time-controlled weather overlay playback charts', type: 'boolean', default: true }, playbackSlots: { title: 'Playback frame slots exposed to plotters', type: 'integer', minimum: 1, maximum: 72, default: 13 }, playbackTimelineMinutes: { title: 'Playback timeline lookback (minutes)', type: 'integer', minimum: 5, maximum: 1440, default: 180 }, playbackIntervalMs: { title: 'Freeboard animation interval (milliseconds)', type: 'integer', minimum: 250, maximum: 10000, default: 900 },
     hazardOverlayEnabled: { title: 'Storm-cell chart overlay', type: 'boolean', default: true }, hazardOverlaySlots: { title: 'Storm overlay rolling frame slots', type: 'integer', minimum: 1, maximum: 72, default: 24 }, hazardPredictionMinutes: { title: 'Predicted storm-cell envelopes (minutes)', type: 'array', uniqueItems: true, default: DEFAULTS.hazardPredictionMinutes, items: { type: 'number', minimum: 1, maximum: 180 } }, hazardOverlayOpacity: { title: 'Default storm-cell overlay opacity', type: 'number', minimum: 0, maximum: 1, default: 0.8 },
     stormEnabled: { title: 'Approaching storm-cell alarm', type: 'boolean', default: true }, stormHistoryFrames: { title: 'Storm tracking history frames', type: 'integer', minimum: 2, maximum: 24, default: 8 }, stormPathStepSec: { title: 'Storm/vessel path intersection step (seconds)', type: 'integer', minimum: 15, maximum: 300, default: 60 }, stormBaseUncertaintyNm: { title: 'Base storm-track uncertainty (NM)', type: 'number', minimum: 0, maximum: 20, default: 1 }, stormMaxUncertaintyNm: { title: 'Maximum storm-track uncertainty (NM)', type: 'number', minimum: 1, maximum: 50, default: 10 }, stormSource: { title: 'Storm-cell source', type: 'string', enum: allCellTargets, default: DEFAULTS.stormSource },
     warnDistanceNm: { title: 'Warning CPA/distance (NM)', type: 'number', minimum: 1, default: 20 }, alarmDistanceNm: { title: 'Alarm CPA/distance (NM)', type: 'number', minimum: 0.5, default: 8 }, horizonMinutes: { title: 'Approach prediction horizon (minutes)', type: 'integer', minimum: 10, maximum: 180, default: 60 }, warnSeverity: { title: 'Warning severity threshold', type: 'number', default: 3 }, alarmSeverity: { title: 'Alarm severity threshold', type: 'number', default: 4 }, matchDistanceNm: { title: 'Cell tracking match radius (NM)', type: 'number', minimum: 1, default: 30 }, notificationPath: { title: 'Signal K notification path', type: 'string', default: DEFAULTS.notificationPath },
