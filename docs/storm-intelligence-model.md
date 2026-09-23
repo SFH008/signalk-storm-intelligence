@@ -43,6 +43,8 @@ Provenance is not optional decoration. It is required to explain conflicting evi
 
 A track should preserve observation history sufficient to estimate motion and uncertainty. Split/merge events are difficult scientific cases and must not be hidden behind arbitrary continuity rules in evaluation.
 
+Ordinary temporal association and split/merge lineage are distinct decisions. Distance-only proximity may be sufficient to keep a possible temporal association candidate, but MUST NOT by itself establish split or merge lineage. A new child receives `parentTrackId`, or a disappearing parent receives `mergedInto`, only when there is positive polygon overlap supporting that lineage relationship. Predicted-footprint lineage may be introduced explicitly in a later algorithm version; until then, absence of overlap leaves lineage unknown rather than inferred from proximity alone.
+
 ## 6. Geometry
 
 Storm hazards are represented by normalized geographic geometry, typically GeoJSON-like polygons in WGS84 longitude/latitude. The geometry is the primary representation for area interaction.

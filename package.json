@@ -54,6 +54,7 @@
   "dependencies": {
     "@jsquash/webp": "^1.5.0",
     "adm-zip": "^0.6.0",
+    "polygon-clipping": "^0.15.7",
     "proj4": "^2.19.10",
     "shapefile": "^0.6.6",
     "sharp": "^0.35.4",
