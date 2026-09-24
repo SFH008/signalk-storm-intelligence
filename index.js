@@ -12,6 +12,7 @@ const { assertProvider, describeProvider, productCapabilities } = require('./lib
 const { hazardsFromCells, renderHazardTile, renderDevelopmentCandidateTile, renderRadarEchoStructureTile, geometryBounds } = require('./lib/hazard-overlay')
 const { normalizeAemetCompo } = require('./lib/aemet-compo-evidence')
 const { normalizeIpmaPcr } = require('./lib/ipma-pcr-evidence')
+const { normalizeNoaRainRate } = require('./lib/noa-rain-rate-evidence')
 const { detectRadarEchoStructures, detectStormCandidates } = require('./lib/storm-detector')
 const { discoverObservationAdapters, defaultsFromObservationAdapters, observationProviderSettingsSchema, instantiateObservationAdapters } = require('./lib/observation-provider-registry')
 const { describeObservationProvider } = require('./lib/observation-provider-contract')
@@ -654,6 +655,11 @@ module.exports = function (app) {
       })
     }else if(t.providerId==='ipma' && t.product==='PCR'){
       evidence=normalizeIpmaPcr(buffer,{
+        bounds:meta.bounds,
+        observedAt:latest.epochMs
+      })
+    }else if(t.providerId==='noa' && t.product==='RAIN_RATE'){
+      evidence=await normalizeNoaRainRate(buffer,{
         bounds:meta.bounds,
         observedAt:latest.epochMs
       })

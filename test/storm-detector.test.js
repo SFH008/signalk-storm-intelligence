@@ -110,3 +110,64 @@ test('radar echo structures preserve weak coherent echoes without promoting them
 
   assert.equal(candidates.length,0)
 })
+
+test('detector preserves estimated reflectivity semantics',()=>{
+  const {
+    detectStormCandidates
+  }=require('../lib/storm-detector')
+
+  const field={
+    schema:'storm-normalized-evidence/1',
+    quantity:'reflectivity',
+    units:'dBZ',
+    observedAt:'2026-09-23T18:35:45.000Z',
+    width:2,
+    height:1,
+    bounds:[22,37,24,38],
+    reflectivityDbz:Float32Array.from([
+      24,
+      28.5
+    ]),
+    provenance:{
+      provider:'test',
+      product:'RAIN_RATE',
+      method:'test-estimated-reflectivity',
+      representation:'derived-reflectivity-estimate'
+    }
+  }
+
+  const rows=detectStormCandidates(field,{
+    minAreaKm2:0,
+    maxAreaKm2:Infinity
+  })
+
+  assert.equal(rows.length,1)
+
+  const detection=rows[0].properties.detection
+  const evidence=rows[0].properties.evidence.reflectivity
+
+  assert.equal(
+    detection.maxReflectivityDbz,
+    28.5
+  )
+
+  assert.equal(
+    detection.maxReflectivityLowerBoundDbz,
+    undefined
+  )
+
+  assert.equal(
+    evidence.maxDbz,
+    28.5
+  )
+
+  assert.equal(
+    evidence.maxLowerBoundDbz,
+    undefined
+  )
+
+  assert.equal(
+    evidence.representation,
+    'derived-reflectivity-estimate'
+  )
+})
