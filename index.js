@@ -11,6 +11,7 @@ const { playbackSlots, resolveSlot, playbackChartId, playbackChartName } = requi
 const { assertProvider, describeProvider, productCapabilities } = require('./lib/provider-contract')
 const { hazardsFromCells, renderHazardTile, renderDevelopmentCandidateTile, renderRadarEchoStructureTile, geometryBounds } = require('./lib/hazard-overlay')
 const { normalizeAemetCompo } = require('./lib/aemet-compo-evidence')
+const { normalizeIpmaPcr } = require('./lib/ipma-pcr-evidence')
 const { detectRadarEchoStructures, detectStormCandidates } = require('./lib/storm-detector')
 const { discoverObservationAdapters, defaultsFromObservationAdapters, observationProviderSettingsSchema, instantiateObservationAdapters } = require('./lib/observation-provider-registry')
 const { describeObservationProvider } = require('./lib/observation-provider-contract')
@@ -639,15 +640,26 @@ module.exports = function (app) {
   async function processDevelopmentCandidates(target, latest, buffer) {
     const t=splitTarget(target)
 
-    if(!t || t.providerId!=='aemet' || t.product!=='COMPO')return false
+    if(!t)return false
 
     const provider=getProvider(t.providerId)
     const meta=getProduct(provider,t.product)
 
-    const evidence=await normalizeAemetCompo(buffer,{
-      bounds:meta.bounds,
-      observedAt:latest.epochMs
-    })
+    let evidence
+
+    if(t.providerId==='aemet' && t.product==='COMPO'){
+      evidence=await normalizeAemetCompo(buffer,{
+        bounds:meta.bounds,
+        observedAt:latest.epochMs
+      })
+    }else if(t.providerId==='ipma' && t.product==='PCR'){
+      evidence=normalizeIpmaPcr(buffer,{
+        bounds:meta.bounds,
+        observedAt:latest.epochMs
+      })
+    }else{
+      return false
+    }
 
     const detectedStructures=detectRadarEchoStructures(evidence,{
       minAreaKm2:25,
