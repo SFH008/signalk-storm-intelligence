@@ -9,9 +9,9 @@ const { discoverInferenceAlgorithms, instantiateInferenceAlgorithms, inferenceSe
 const { InferenceEngine } = require('./lib/inference-engine')
 const { playbackSlots, resolveSlot, playbackChartId, playbackChartName } = require('./lib/playback')
 const { assertProvider, describeProvider, productCapabilities } = require('./lib/provider-contract')
-const { hazardsFromCells, renderHazardTile, renderDevelopmentCandidateTile, geometryBounds } = require('./lib/hazard-overlay')
+const { hazardsFromCells, renderHazardTile, renderDevelopmentCandidateTile, renderRadarEchoStructureTile, geometryBounds } = require('./lib/hazard-overlay')
 const { normalizeAemetCompo } = require('./lib/aemet-compo-evidence')
-const { detectStormCandidates } = require('./lib/storm-detector')
+const { detectRadarEchoStructures, detectStormCandidates } = require('./lib/storm-detector')
 const { discoverObservationAdapters, defaultsFromObservationAdapters, observationProviderSettingsSchema, instantiateObservationAdapters } = require('./lib/observation-provider-registry')
 const { describeObservationProvider } = require('./lib/observation-provider-contract')
 const { lightningSummary, attachLightning } = require('./lib/lightning-engine')
@@ -141,6 +141,40 @@ function hazardChartRecords(pluginId, cfg) {
 }
 
 
+function radarEchoStructureChartId(){
+  return 'storm-intelligence-radar-echo-structures'
+}
+
+function radarEchoStructureChartRecord(pluginId,cfg){
+  const id=radarEchoStructureChartId()
+
+  return [[id,{
+    identifier:id,
+    name:'Storm Intelligence · Radar echo structures (development)',
+    description:'Experimental coherent radar echo footprints. No convection, severity, warning or vessel-threat claim.',
+    type:'tilelayer',
+    format:'png',
+    minzoom:cfg.minZoom,
+    maxzoom:cfg.maxZoom,
+    bounds:[-180,-85,180,85],
+    url:`/stormintelligence/${pluginId}/radar-echo-structures/{z}/{x}/{y}.png`,
+    attribution:'Storm Intelligence development detector',
+    stormIntelligence:{
+      apiVersion:'2.0-draft',
+      kind:'development-radar-echo-structures',
+      development:true,
+      validated:false,
+      capabilities:{
+        precipitationStructure:true,
+        convection:false,
+        severity:false,
+        threat:false,
+        prediction:false
+      }
+    }
+  }]]
+}
+
 function developmentCandidateChartId(){
   return 'storm-intelligence-development-candidates'
 }
@@ -200,7 +234,7 @@ function extensionManifest(pluginId, version) {
 module.exports = function (app) {
   const plugin = { id: 'signalk-storm-intelligence', name: 'Storm Intelligence', version: PACKAGE_VERSION }
   let cfg = { ...DEFAULTS }, providers = new Map(), observationProviders = new Map(), inferenceAlgorithms = new Map(), inferenceEngine, cache = makeCache(DEFAULTS.cacheEntries), charts = {}, storage, tileStore, environmentFusion, weatherApiFusion
-  let timer = null, startupTimer = null, running = false, busy = false, lastAcquired = {}, lastPrefetched = {}, cells = [], developmentCandidates = [], developmentCandidatesTime = null, lightningStrikes = [], lightningState = 'normal', lightningMessage = '', environmentContext = {available:false}, weatherApiContext = {available:false}, hazardSnapshots = new Map(), hazardSequence = 0, activeHazardSlot = 0, lastAlarm = 'normal', lastAlarmText = '', lastError = null, assetsMounted = false
+  let timer = null, startupTimer = null, running = false, busy = false, lastAcquired = {}, lastPrefetched = {}, cells = [], radarEchoStructures = [], radarEchoStructuresTime = null, developmentCandidates = [], developmentCandidatesTime = null, lightningStrikes = [], lightningState = 'normal', lightningMessage = '', environmentContext = {available:false}, weatherApiContext = {available:false}, hazardSnapshots = new Map(), hazardSequence = 0, activeHazardSlot = 0, lastAlarm = 'normal', lastAlarmText = '', lastError = null, assetsMounted = false
   const activeErrors = new Map()
   const syncLastError = () => { lastError = [...activeErrors.values()].at(-1)?.message || null }
   const err = (message, component = 'runtime') => { activeErrors.set(component, { message, at: new Date().toISOString() }); syncLastError(); app.error?.(message) }
@@ -486,6 +520,14 @@ module.exports = function (app) {
       acquisition: { enabled: cfg.backgroundEnabled, targets: cfg.acquisitionTargets, lastAcquired, storage: await storage?.stats() },
       prefetch: { enabled: cfg.prefetchEnabled, targets: cfg.prefetchTargets, radiusNm: cfg.prefetchRadiusNm, zooms: cfg.prefetchZooms, lastPrefetched, storage: await tileStore?.stats() },
       storm: { enabled: cfg.stormEnabled, source: cfg.stormSource, state: lastAlarm, message: lastAlarmText, cells, overlay: hazardOverlayStatus() },
+      radarEchoStructures: {
+        classification:'development-radar-echo-structure',
+        development:true,
+        validated:false,
+        time:radarEchoStructuresTime,
+        count:radarEchoStructures.length,
+        chartId:radarEchoStructureChartId()
+      },
       developmentCandidates: {
         classification:'development-storm-candidate',
         development:true,
@@ -541,6 +583,31 @@ module.exports = function (app) {
         res.set('Content-Type','image/png'); res.set('Cache-Control','public, max-age=15'); res.send(b)
       } catch (e) { res.status(500).end() }
     })
+    app.get(`${tileBase}/radar-echo-structures/:z/:x/:y.png`, async (req,res)=>{
+      try{
+        const z=Number(req.params.z)
+        const x=Number(req.params.x)
+        const y=Number(req.params.y)
+
+        if(
+          ![z,x,y].every(Number.isInteger) ||
+          z<cfg.minZoom ||
+          z>cfg.maxZoom
+        )return res.status(400).end()
+
+        const b=renderRadarEchoStructureTile(
+          radarEchoStructures,
+          z,x,y
+        )
+
+        res.set('Content-Type','image/png')
+        res.set('Cache-Control','no-store')
+        res.send(b)
+      }catch(e){
+        res.status(500).end()
+      }
+    })
+
     app.get(`${tileBase}/development-candidates/:z/:x/:y.png`, async (req,res)=>{
       try{
         const z=Number(req.params.z)
@@ -581,6 +648,28 @@ module.exports = function (app) {
       bounds:meta.bounds,
       observedAt:latest.epochMs
     })
+
+    const detectedStructures=detectRadarEchoStructures(evidence,{
+      minAreaKm2:25,
+      maxAreaKm2:Infinity
+    })
+
+    radarEchoStructures=detectedStructures.map((feature,index)=>({
+      ...feature,
+      properties:{
+        ...(feature.properties||{}),
+        structureOrdinal:index+1,
+        provider:t.providerId,
+        product:t.product,
+        classification:'development-radar-echo-structure',
+        development:true,
+        validated:false
+      }
+    }))
+
+    radarEchoStructuresTime=
+      latest.time ||
+      new Date(latest.epochMs).toISOString()
 
     const detected=detectStormCandidates(evidence,{
       minReflectivityDbz:24,
@@ -787,7 +876,7 @@ module.exports = function (app) {
     cache = makeCache(Math.max(16, Number(cfg.cacheEntries) || DEFAULTS.cacheEntries))
     mountAssets()
     hazardSnapshots = new Map(); hazardSequence = 0; activeHazardSlot = 0
-    charts = Object.fromEntries([...cfg.displayLayers.flatMap(key => { const t = splitTarget(key); return chartRecords(plugin.id, getProvider(t.providerId), t.product, cfg) }), ...hazardChartRecords(plugin.id, cfg), ...developmentCandidateChartRecord(plugin.id,cfg), ...lightningChartRecord(plugin.id,cfg), ...lightningDensityChartRecords(plugin.id,cfg,observationProviders)])
+    charts = Object.fromEntries([...cfg.displayLayers.flatMap(key => { const t = splitTarget(key); return chartRecords(plugin.id, getProvider(t.providerId), t.product, cfg) }), ...hazardChartRecords(plugin.id, cfg), ...radarEchoStructureChartRecord(plugin.id,cfg), ...developmentCandidateChartRecord(plugin.id,cfg), ...lightningChartRecord(plugin.id,cfg), ...lightningDensityChartRecords(plugin.id,cfg,observationProviders)])
     storage = new RecyclingStorage(path.join(dataDir(), 'archive'), { enabled: cfg.storageEnabled, maxBytes: cfg.storageMaxMB * 1024 * 1024, maxAgeMs: cfg.storageMaxAgeHours * 3600 * 1000 })
     storage.init().catch(e => err(e.message))
     tileStore = new TileStore(path.join(dataDir(), 'prefetch'), { enabled: cfg.prefetchEnabled, maxBytes: cfg.prefetchStorageMaxMB * 1024 * 1024, maxAgeMs: cfg.prefetchStorageMaxAgeHours * 3600 * 1000 })
@@ -878,8 +967,8 @@ module.exports = function (app) {
     minZoom: { type: 'integer', minimum: 0, maximum: 22, default: 4 }, maxZoom: { type: 'integer', minimum: 0, maximum: 22, default: 13 }, cacheSeconds: { type: 'integer', minimum: 0, maximum: 3600, default: 60 }, cacheEntries: { type: 'integer', minimum: 16, maximum: 10000, default: 512 }, requestTimeoutMs: { type: 'integer', minimum: 1000, maximum: 60000, default: 10000 }
   } })
 
-  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, config: () => cfg, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
+  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, config: () => cfg, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
   return plugin
 }
 
-module.exports._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds }
+module.exports._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds }
