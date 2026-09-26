@@ -485,3 +485,260 @@ test('match-distance boundary is deterministic for rapid motion',()=>{
     )
   }
 })
+
+
+// PHASE 7.3c TRACKER STRESS VALIDATION GATE 2
+
+test('three-way split preserves one parent and creates two children with lineage',()=>{
+  const t=tracker({
+    matchDistanceM:100000
+  })
+
+  const first=t.update([
+    polygon('parent',12.00,40,.18,.10)
+  ],0)
+
+  const parentId=first[0].trackId
+
+  const second=t.update([
+    polygon('child-left',12.00,40,.06,.10),
+    polygon('child-middle',12.06,40,.06,.10),
+    polygon('child-right',12.12,40,.06,.10)
+  ],300000)
+
+  assert.equal(second.length,3)
+
+  const retained=second.find(x=>x.trackId===parentId)
+  const children=second.filter(x=>x.trackId!==parentId)
+
+  assert.ok(retained)
+  assert.equal(children.length,2)
+
+  for(const child of children){
+    assert.equal(
+      child.parentTrackId,
+      parentId,
+      'new split children must reference original parent'
+    )
+  }
+})
+
+
+test('multi-parent merge preserves one survivor and closes all overlapping losers',()=>{
+  const t=tracker({
+    matchDistanceM:100000
+  })
+
+  const first=t.update([
+    polygon('left',12.00,40,.06,.10),
+    polygon('middle',12.06,40,.06,.10),
+    polygon('right',12.12,40,.06,.10)
+  ],0)
+
+  const originalIds=first.map(x=>x.trackId)
+
+  const second=t.update([
+    polygon('merged',12.00,40,.18,.10)
+  ],300000)
+
+  assert.equal(second.length,1)
+
+  const survivor=second[0].trackId
+  assert.ok(originalIds.includes(survivor))
+
+  const losers=originalIds.filter(id=>id!==survivor)
+
+  const state=t.snapshotState()
+
+  for(const loser of losers){
+    const closed=state.closedTracks.find(
+      x=>x.trackId===loser
+    )
+
+    assert.ok(
+      closed,
+      `merged parent ${loser} should be closed`
+    )
+
+    assert.equal(
+      closed.lifecycle.status,
+      'merged'
+    )
+
+    assert.equal(
+      closed.lifecycle.mergedInto,
+      survivor
+    )
+  }
+})
+
+
+test('split followed by merge keeps lineage coherent',()=>{
+  const t=tracker({
+    matchDistanceM:100000
+  })
+
+  const first=t.update([
+    polygon('parent',12.00,40,.12,.10)
+  ],0)
+
+  const parentId=first[0].trackId
+
+  const split=t.update([
+    polygon('child-a',12.00,40,.06,.10),
+    polygon('child-b',12.06,40,.06,.10)
+  ],300000)
+
+  assert.equal(split.length,2)
+
+  const retained=split.find(x=>x.trackId===parentId)
+  const created=split.find(x=>x.trackId!==parentId)
+
+  assert.ok(retained)
+  assert.ok(created)
+  assert.equal(created.parentTrackId,parentId)
+
+  const merged=t.update([
+    polygon('merged-again',12.00,40,.12,.10)
+  ],600000)
+
+  assert.equal(merged.length,1)
+
+  const survivor=merged[0].trackId
+  assert.ok(
+    [retained.trackId,created.trackId].includes(survivor)
+  )
+
+  const loser=
+    survivor===retained.trackId
+      ? created.trackId
+      : retained.trackId
+
+  const closed=t.snapshotState()
+    .closedTracks
+    .find(x=>x.trackId===loser)
+
+  assert.ok(closed)
+  assert.equal(closed.lifecycle.status,'merged')
+  assert.equal(closed.lifecycle.mergedInto,survivor)
+})
+
+
+test('track identity survives dateline crossing eastward',()=>{
+  const t=tracker({
+    matchDistanceM:100000
+  })
+
+  const first=t.update([
+    polygon('before',179.70,10,.08,.08)
+  ],0)
+
+  const trackId=first[0].trackId
+
+  const second=t.update([
+    polygon('after',-179.75,10,.08,.08)
+  ],300000)
+
+  assert.equal(second.length,1)
+  assert.equal(
+    second[0].trackId,
+    trackId,
+    'dateline crossing must preserve track identity'
+  )
+})
+
+
+test('association result is deterministic under reversed input order',()=>{
+  function runScenario(reverseSecondFrame=false){
+    const t=tracker({
+      matchDistanceM:100000
+    })
+
+    const first=t.update([
+      polygon('left-0',12.00,40,.04,.08),
+      polygon('right-0',12.20,40,.04,.08)
+    ],0)
+
+    const leftId=first.find(
+      x=>x.sourceId==='left-0'
+    ).trackId
+
+    const rightId=first.find(
+      x=>x.sourceId==='right-0'
+    ).trackId
+
+    const features=[
+      polygon('left-1',12.02,40,.04,.08),
+      polygon('right-1',12.22,40,.04,.08)
+    ]
+
+    const second=t.update(
+      reverseSecondFrame
+        ? [...features].reverse()
+        : features,
+      300000
+    )
+
+    return {
+      left:
+        second.find(x=>x.sourceId==='left-1').trackId,
+      right:
+        second.find(x=>x.sourceId==='right-1').trackId,
+      leftId,
+      rightId
+    }
+  }
+
+  const normal=runScenario(false)
+  const reversed=runScenario(true)
+
+  assert.equal(normal.left,normal.leftId)
+  assert.equal(normal.right,normal.rightId)
+
+  assert.equal(reversed.left,reversed.leftId)
+  assert.equal(reversed.right,reversed.rightId)
+
+  assert.deepEqual(
+    {
+      left:normal.left===normal.leftId,
+      right:normal.right===normal.rightId
+    },
+    {
+      left:reversed.left===reversed.leftId,
+      right:reversed.right===reversed.rightId
+    }
+  )
+})
+
+
+test('coverage-edge disappearance expires cleanly without false merge lineage',()=>{
+  const t=tracker({
+    maxMissedFrames:1,
+    matchDistanceM:100000
+  })
+
+  const first=t.update([
+    polygon('edge-cell',12.00,40,.04,.08)
+  ],0)
+
+  const trackId=first[0].trackId
+
+  t.update([],300000)
+  t.update([],600000)
+
+  const state=t.snapshotState()
+
+  assert.ok(
+    !state.activeTracks.some(
+      x=>x.trackId===trackId
+    )
+  )
+
+  const closed=state.closedTracks.find(
+    x=>x.trackId===trackId
+  )
+
+  assert.ok(closed)
+  assert.equal(closed.lifecycle.status,'expired')
+  assert.equal(closed.lifecycle.mergedInto,null)
+})
