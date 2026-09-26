@@ -39,6 +39,9 @@ const DEFAULTS = Object.freeze({
   prefetchMaxTilesPerCycle: 1024, prefetchStorageMaxMB: 512, prefetchStorageMaxAgeHours: 6, prefetchConcurrency: 6,
   playbackEnabled: true, playbackSlots: 13, playbackTimelineMinutes: 180, playbackIntervalMs: 900,
   hazardOverlayEnabled: true, hazardOverlaySlots: 24, hazardPredictionMinutes: [15, 30, 60], hazardOverlayOpacity: 0.8,
+  candidateMinReflectivityDbz: 24,
+  candidateMinAreaKm2: 5,
+  candidateMaxAreaKm2: 1000,
   stormEnabled: true, stormSource: ADAPTER_DEFAULTS.stormSource, warnDistanceNm: 20, alarmDistanceNm: 8,
   horizonMinutes: 60, warnSeverity: 3, alarmSeverity: 4, matchDistanceNm: 30,
   notificationPath: 'notifications.environment.weather.storm',
@@ -209,6 +212,9 @@ function developmentCandidateChartRecord(pluginId,cfg){
     }
   }]]
 }
+
+
+
 
 function lightningChartId(){ return 'storm-intelligence-lightning' }
 function lightningDensityChartId(providerId){return `storm-intelligence-lightning-density-${String(providerId).replace(/[^a-z0-9-]/gi,'-').toLowerCase()}`}
@@ -538,6 +544,7 @@ module.exports = function (app) {
         count:developmentCandidates.length,
         chartId:developmentCandidateChartId()
       },
+
       lightning: { enabled: cfg.lightningEnabled, providers:[...observationProviders].map(([id,p])=>describeObservationProvider(p)), state:lightningState, message:lightningMessage, summary:lightningSummary(lightningStrikes,vessel().position), observations:lightningStrikes },
       onboardEnvironment: environmentContext,
       weatherObservations: weatherApiContext,
@@ -635,6 +642,7 @@ module.exports = function (app) {
       }
     })
 
+
     assetsMounted = true
   }
 
@@ -690,9 +698,9 @@ module.exports = function (app) {
       new Date(latest.epochMs).toISOString()
 
     const detected=detectStormCandidates(evidence,{
-      minReflectivityDbz:24,
-      minAreaKm2:25,
-      maxAreaKm2:1000
+      minReflectivityDbz:cfg.candidateMinReflectivityDbz,
+      minAreaKm2:cfg.candidateMinAreaKm2,
+      maxAreaKm2:cfg.candidateMaxAreaKm2
     })
 
     developmentCandidates=detected.map((feature,index)=>({
@@ -711,6 +719,7 @@ module.exports = function (app) {
     developmentCandidatesTime=
       latest.time ||
       new Date(latest.epochMs).toISOString()
+
 
     return true
   }
@@ -975,6 +984,9 @@ module.exports = function (app) {
     prefetchEnabled: { title: 'Geographic radar prefetch/offline cache', type: 'boolean', default: true }, prefetchTargets: { title: 'Raster products to prefetch around own ship', type: 'array', uniqueItems: true, default: DEFAULTS.prefetchTargets, items: { type: 'string', enum: [...allRasterTargets] } }, prefetchRadiusNm: { title: 'Prefetch radius around own ship (NM)', type: 'number', minimum: 1, maximum: 500, default: 40 }, prefetchZooms: { title: 'Prefetch zoom levels', type: 'array', uniqueItems: true, default: DEFAULTS.prefetchZooms, items: { type: 'integer', minimum: 0, maximum: 22 } }, prefetchMaxTilesPerCycle: { title: 'Maximum tiles per prefetch cycle', type: 'integer', minimum: 1, maximum: 20000, default: 1024 }, prefetchConcurrency: { title: 'Concurrent upstream prefetch requests', type: 'integer', minimum: 1, maximum: 32, default: 6 }, prefetchStorageMaxMB: { title: 'Maximum rendered prefetch storage (MB, 0 unlimited)', type: 'integer', minimum: 0, default: 512 }, prefetchStorageMaxAgeHours: { title: 'Maximum rendered prefetch age (hours, 0 unlimited)', type: 'number', minimum: 0, default: 6 },
     playbackEnabled: { title: 'Time-controlled weather overlay playback charts', type: 'boolean', default: true }, playbackSlots: { title: 'Playback frame slots exposed to plotters', type: 'integer', minimum: 1, maximum: 72, default: 13 }, playbackTimelineMinutes: { title: 'Playback timeline lookback (minutes)', type: 'integer', minimum: 5, maximum: 1440, default: 180 }, playbackIntervalMs: { title: 'Freeboard animation interval (milliseconds)', type: 'integer', minimum: 250, maximum: 10000, default: 900 },
     hazardOverlayEnabled: { title: 'Storm-cell chart overlay', type: 'boolean', default: true }, hazardOverlaySlots: { title: 'Storm overlay rolling frame slots', type: 'integer', minimum: 1, maximum: 72, default: 24 }, hazardPredictionMinutes: { title: 'Predicted storm-cell envelopes (minutes)', type: 'array', uniqueItems: true, default: DEFAULTS.hazardPredictionMinutes, items: { type: 'number', minimum: 1, maximum: 180 } }, hazardOverlayOpacity: { title: 'Default storm-cell overlay opacity', type: 'number', minimum: 0, maximum: 1, default: 0.8 },
+    candidateMinReflectivityDbz: { title: 'Storm candidate minimum reflectivity (dBZ)', type: 'number', minimum: -20, maximum: 80, default: DEFAULTS.candidateMinReflectivityDbz },
+    candidateMinAreaKm2: { title: 'Storm candidate minimum area (km²)', type: 'number', minimum: 0, maximum: 10000, default: DEFAULTS.candidateMinAreaKm2 },
+    candidateMaxAreaKm2: { title: 'Storm candidate maximum area (km²)', type: 'number', minimum: 1, maximum: 1000000, default: DEFAULTS.candidateMaxAreaKm2 },
     stormEnabled: { title: 'Approaching storm-cell alarm', type: 'boolean', default: true }, stormHistoryFrames: { title: 'Storm tracking history frames', type: 'integer', minimum: 2, maximum: 24, default: 8 }, stormPathStepSec: { title: 'Storm/vessel path intersection step (seconds)', type: 'integer', minimum: 15, maximum: 300, default: 60 }, stormBaseUncertaintyNm: { title: 'Base storm-track uncertainty (NM)', type: 'number', minimum: 0, maximum: 20, default: 1 }, stormMaxUncertaintyNm: { title: 'Maximum storm-track uncertainty (NM)', type: 'number', minimum: 1, maximum: 50, default: 10 }, stormSource: { title: 'Storm-cell source', type: 'string', enum: allCellTargets, default: DEFAULTS.stormSource },
     warnDistanceNm: { title: 'Warning CPA/distance (NM)', type: 'number', minimum: 1, default: 20 }, alarmDistanceNm: { title: 'Alarm CPA/distance (NM)', type: 'number', minimum: 0.5, default: 8 }, horizonMinutes: { title: 'Approach prediction horizon (minutes)', type: 'integer', minimum: 10, maximum: 180, default: 60 }, warnSeverity: { title: 'Warning severity threshold', type: 'number', default: 3 }, alarmSeverity: { title: 'Alarm severity threshold', type: 'number', default: 4 }, matchDistanceNm: { title: 'Cell tracking match radius (NM)', type: 'number', minimum: 1, default: 30 }, notificationPath: { title: 'Signal K notification path', type: 'string', default: DEFAULTS.notificationPath },
     lightningEnabled:{title:'Lightning observation fusion',type:'boolean',default:false}, lightningProviders:{title:'Enabled lightning observation providers',type:'array',uniqueItems:true,default:DEFAULTS.lightningProviders,items:{type:'string',enum:[...OBSERVATION_ADAPTERS.keys()]}}, lightningProviderSettings:observationProviderSettingsSchema(OBSERVATION_ADAPTERS), lightningLookbackMinutes:{title:'Lightning lookback (minutes)',type:'integer',minimum:5,maximum:180,default:30}, lightningQueryRadiusNm:{title:'Lightning query radius (NM)',type:'number',minimum:10,maximum:500,default:120}, lightningAssociationRadiusNm:{title:'Maximum strike-to-cell association distance (NM)',type:'number',minimum:.5,maximum:100,default:8}, lightningEvidenceWeight:{title:'Maximum lightning confidence contribution',type:'number',minimum:0,maximum:.3,default:.15}, lightningOverlayEnabled:{title:'Show lightning overlay in plotters',type:'boolean',default:true}, lightningOverlayOpacity:{title:'Lightning overlay opacity',type:'number',minimum:0,maximum:1,default:.9}, lightningWarningNm:{title:'Lightning warning radius (NM)',type:'number',minimum:1,default:15}, lightningAlarmNm:{title:'Lightning alarm radius (NM)',type:'number',minimum:.5,default:8}, lightningMinStrikes:{title:'Minimum recent strikes for proximity warning',type:'integer',minimum:1,default:2}, lightningNotificationPath:{title:'Lightning Signal K notification path',type:'string',default:DEFAULTS.lightningNotificationPath},
