@@ -130,3 +130,184 @@ test('longitude helpers remain dateline-safe',()=>{
     181
   )
 })
+
+
+// PHASE 7.3e1 MOTION QUALITY CONTRACT
+
+function buildMotionHistory({
+  start=[12,40],
+  velocities,
+  intervals
+}) {
+  const out=[{
+    epochMs:0,
+    centroid:start
+  }]
+
+  let point=start
+  let epochMs=0
+
+  for(let i=0;i<velocities.length;i++){
+    const dt=intervals[i]
+    const v=velocities[i]
+
+    point=localPoint(
+      point,
+      v.east*dt,
+      v.north*dt
+    )
+
+    epochMs += dt*1000
+
+    out.push({
+      epochMs,
+      centroid:point
+    })
+  }
+
+  return out
+}
+
+
+test('accelerating storm reports positive along-track acceleration',()=>{
+  const result=robustTrackVelocity(
+    buildMotionHistory({
+      velocities:[
+        {east:4,north:0},
+        {east:6,north:0},
+        {east:10,north:0},
+        {east:16,north:0}
+      ],
+      intervals:[300,300,300,300]
+    })
+  )
+
+  assert.ok(
+    Number.isFinite(result.accelerationMps2),
+    'motion result must expose accelerationMps2'
+  )
+
+  assert.ok(
+    result.accelerationMps2 > 0,
+    `expected positive acceleration, got ${result.accelerationMps2}`
+  )
+})
+
+
+test('decelerating storm reports negative along-track acceleration',()=>{
+  const result=robustTrackVelocity(
+    buildMotionHistory({
+      velocities:[
+        {east:16,north:0},
+        {east:10,north:0},
+        {east:6,north:0},
+        {east:4,north:0}
+      ],
+      intervals:[300,300,300,300]
+    })
+  )
+
+  assert.ok(
+    Number.isFinite(result.accelerationMps2),
+    'motion result must expose accelerationMps2'
+  )
+
+  assert.ok(
+    result.accelerationMps2 < 0,
+    `expected negative acceleration, got ${result.accelerationMps2}`
+  )
+})
+
+
+test('turning storm reports turn rate and reduces predictive confidence',()=>{
+  const straight=robustTrackVelocity(
+    buildMotionHistory({
+      velocities:[
+        {east:10,north:0},
+        {east:10,north:0},
+        {east:10,north:0},
+        {east:10,north:0}
+      ],
+      intervals:[300,300,300,300]
+    })
+  )
+
+  const turning=robustTrackVelocity(
+    buildMotionHistory({
+      velocities:[
+        {east:10,north:0},
+        {east:8,north:4},
+        {east:4,north:8},
+        {east:0,north:10}
+      ],
+      intervals:[300,300,300,300]
+    })
+  )
+
+  assert.ok(
+    Number.isFinite(turning.turnRateDegPerMin),
+    'motion result must expose turnRateDegPerMin'
+  )
+
+  assert.ok(
+    Math.abs(turning.turnRateDegPerMin) > 0.1,
+    `expected meaningful turn rate, got ${turning.turnRateDegPerMin}`
+  )
+
+  assert.ok(
+    Number.isFinite(turning.predictiveConfidence),
+    'motion result must expose predictiveConfidence'
+  )
+
+  assert.ok(
+    Number.isFinite(straight.predictiveConfidence),
+    'straight motion must expose predictiveConfidence'
+  )
+
+  assert.ok(
+    turning.predictiveConfidence <
+      straight.predictiveConfidence,
+    `turning confidence ${turning.predictiveConfidence} should be lower than straight confidence ${straight.predictiveConfidence}`
+  )
+})
+
+
+test('abnormally long latest interval reduces freshness confidence',()=>{
+  const regular=robustTrackVelocity(
+    buildMotionHistory({
+      velocities:[
+        {east:10,north:0},
+        {east:10,north:0},
+        {east:10,north:0}
+      ],
+      intervals:[300,300,300]
+    })
+  )
+
+  const longGap=robustTrackVelocity(
+    buildMotionHistory({
+      velocities:[
+        {east:10,north:0},
+        {east:10,north:0},
+        {east:10,north:0}
+      ],
+      intervals:[300,300,1800]
+    })
+  )
+
+  assert.ok(
+    Number.isFinite(regular.freshnessConfidence),
+    'motion result must expose freshnessConfidence'
+  )
+
+  assert.ok(
+    Number.isFinite(longGap.freshnessConfidence),
+    'long-gap motion must expose freshnessConfidence'
+  )
+
+  assert.ok(
+    longGap.freshnessConfidence <
+      regular.freshnessConfidence,
+    `long-gap freshness ${longGap.freshnessConfidence} should be lower than regular freshness ${regular.freshnessConfidence}`
+  )
+})
