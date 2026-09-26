@@ -106,6 +106,7 @@ function tracker(config={}){
       },
       haversine:engine.haversine,
       robustTrackVelocity:engine.robustTrackVelocity,
+      translateGeometryLocal:engine.translateGeometryLocal,
       localPoint:(origin,east,north)=>{
         const R=6371008.8
         const rad=d=>d*Math.PI/180
@@ -229,4 +230,258 @@ test('tracker retains then expires unmatched track',()=>{
         x.lifecycle.status==='expired'
       )
   )
+})
+
+
+// PHASE 7.3c TRACKER STRESS VALIDATION GATE 1
+
+test('nearby parallel cells retain separate track identities',()=>{
+  const t=tracker()
+
+  const first=t.update([
+    polygon('left-0',12.00,40,.04,.08),
+    polygon('right-0',12.25,40,.04,.08)
+  ],0)
+
+  const leftId=first.find(x=>x.sourceId==='left-0').trackId
+  const rightId=first.find(x=>x.sourceId==='right-0').trackId
+
+  const second=t.update([
+    polygon('left-1',12.02,40,.04,.08),
+    polygon('right-1',12.27,40,.04,.08)
+  ],300000)
+
+  assert.equal(
+    second.find(x=>x.sourceId==='left-1').trackId,
+    leftId
+  )
+
+  assert.equal(
+    second.find(x=>x.sourceId==='right-1').trackId,
+    rightId
+  )
+
+  assert.notEqual(leftId,rightId)
+})
+
+
+test('crossing cells retain identity using predicted motion',()=>{
+  const t=tracker({
+    matchDistanceM:100000
+  })
+
+  const first=t.update([
+    polygon('eastbound-0',12.00,40,.03,.06),
+    polygon('westbound-0',12.30,40,.03,.06)
+  ],0)
+
+  const eastboundId=
+    first.find(x=>x.sourceId==='eastbound-0').trackId
+
+  const westboundId=
+    first.find(x=>x.sourceId==='westbound-0').trackId
+
+  t.update([
+    polygon('eastbound-1',12.10,40,.03,.06),
+    polygon('westbound-1',12.20,40,.03,.06)
+  ],300000)
+
+  const third=t.update([
+    polygon('eastbound-2',12.20,40,.03,.06),
+    polygon('westbound-2',12.10,40,.03,.06)
+  ],600000)
+
+  assert.equal(
+    third.find(x=>x.sourceId==='eastbound-2').trackId,
+    eastboundId
+  )
+
+  assert.equal(
+    third.find(x=>x.sourceId==='westbound-2').trackId,
+    westboundId
+  )
+})
+
+
+test('one missed frame reacquires the existing track',()=>{
+  const t=tracker({
+    maxMissedFrames:1
+  })
+
+  const first=t.update(
+    [polygon('cell-0',12.00)],
+    0
+  )
+
+  const trackId=first[0].trackId
+
+  t.update(
+    [polygon('cell-1',12.04)],
+    300000
+  )
+
+  const missed=t.update([],600000)
+
+  assert.equal(missed.length,0)
+
+  const dormant=t.snapshotState()
+    .activeTracks
+    .find(x=>x.trackId===trackId)
+
+  assert.ok(dormant)
+  assert.equal(dormant.lifecycle.missedFrames,1)
+
+  const reacquired=t.update(
+    [polygon('cell-3',12.12)],
+    900000
+  )
+
+  assert.equal(reacquired.length,1)
+  assert.equal(reacquired[0].trackId,trackId)
+
+  const active=t.snapshotState()
+    .activeTracks
+    .find(x=>x.trackId===trackId)
+
+  assert.ok(active)
+  assert.equal(active.lifecycle.missedFrames,0)
+})
+
+
+test('irregular observation intervals preserve track identity',()=>{
+  const t=tracker({
+    matchDistanceM:100000
+  })
+
+  const first=t.update(
+    [polygon('cell-0',12.00,40,.03,.06)],
+    0
+  )
+
+  const trackId=first[0].trackId
+
+  const second=t.update(
+    [polygon('cell-1',12.04,40,.03,.06)],
+    120000
+  )
+
+  assert.equal(second[0].trackId,trackId)
+
+  /*
+   * Same approximate eastward motion, but after a much longer
+   * observation interval.
+   */
+  const third=t.update(
+    [polygon('cell-2',12.18,40,.03,.06)],
+    540000
+  )
+
+  assert.equal(third[0].trackId,trackId)
+
+  const state=t.snapshotState()
+  const active=state.activeTracks.find(
+    x=>x.trackId===trackId
+  )
+
+  assert.ok(active)
+  assert.equal(active.lifecycle.observations,3)
+  assert.equal(active.history.length,3)
+})
+
+
+test('same-timestamp replacement does not duplicate track history',()=>{
+  const t=tracker()
+
+  const first=t.update(
+    [polygon('initial',12.00)],
+    300000
+  )
+
+  const trackId=first[0].trackId
+
+  const replacement=t.update(
+    [polygon('replacement',12.01)],
+    300000
+  )
+
+  assert.equal(replacement[0].trackId,trackId)
+
+  const active=t.snapshotState()
+    .activeTracks
+    .find(x=>x.trackId===trackId)
+
+  assert.ok(active)
+
+  assert.equal(
+    active.history.length,
+    1,
+    'same timestamp must replace rather than append history'
+  )
+
+  assert.equal(
+    active.history[0].epochMs,
+    300000
+  )
+})
+
+
+test('match-distance boundary is deterministic for rapid motion',()=>{
+  /*
+   * At latitude 40 degrees, 1.10 degrees longitude is roughly
+   * 94 km and 1.30 degrees is roughly 111 km.
+   *
+   * With matchDistanceM = 100 km and no polygon overlap,
+   * the first case should associate and the second should not.
+   */
+
+  {
+    const t=tracker({
+      matchDistanceM:100000
+    })
+
+    const first=t.update(
+      [polygon('start',12.00,40,.02,.04)],
+      0
+    )
+
+    const original=first[0].trackId
+
+    const second=t.update(
+      [polygon('inside',13.10,40,.02,.04)],
+      300000
+    )
+
+    assert.equal(second[0].trackId,original)
+  }
+
+  {
+    const t=tracker({
+      matchDistanceM:100000
+    })
+
+    const first=t.update(
+      [polygon('start',12.00,40,.02,.04)],
+      0
+    )
+
+    const original=first[0].trackId
+
+    const second=t.update(
+      [polygon('outside',13.30,40,.02,.04)],
+      300000
+    )
+
+    assert.notEqual(second[0].trackId,original)
+
+    /*
+     * The unmatched original track remains dormant for the
+     * configured missed-frame horizon rather than being silently
+     * converted into the new observation.
+     */
+    assert.ok(
+      t.snapshotState().activeTracks.some(
+        x=>x.trackId===original
+      )
+    )
+  }
 })
