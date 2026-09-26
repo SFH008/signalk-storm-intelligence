@@ -32,6 +32,28 @@ test('AEMET COMPO palette normalizes to conservative dBZ lower bounds',async()=>
     Array.from(field.reflectivityLowerBoundDbz),
     [12,24,66]
   )
+
+  assert.equal(field.schema,'storm-normalized-evidence/1')
+  assert.equal(field.domain,'radar')
+  assert.equal(field.quantity,'reflectivity')
+  assert.equal(field.units,'dBZ')
+
+  assert.equal(field.values,field.reflectivityLowerBoundDbz)
+
+  assert.deepEqual(
+    field.valueSemantics,
+    {
+      representation:'lower-bound',
+      derivation:'native',
+      sourceQuantity:'reflectivity',
+      sourceUnits:'dBZ',
+      intervalSemantics:{
+        kind:'class-interval',
+        boundUsed:'lower'
+      },
+      conversion:null
+    }
+  )
 })
 
 test('detector uses 8-neighbour connectivity and emits one deterministic candidate',()=>{
@@ -109,6 +131,178 @@ test('radar echo structures preserve weak coherent echoes without promoting them
   assert.equal(structures[0].properties.detection.pixelCount,2)
 
   assert.equal(candidates.length,0)
+})
+
+
+test('detector consumes provider-neutral values and lower-bound semantics',()=>{
+  const {
+    detectStormCandidates
+  }=require('../lib/storm-detector')
+
+  const field={
+    schema:'storm-normalized-evidence/1',
+    domain:'radar',
+    quantity:'reflectivity',
+    units:'dBZ',
+    observedAt:'2026-09-24T20:00:00.000Z',
+    width:2,
+    height:1,
+    bounds:[0,0,2,1],
+    values:Float32Array.from([
+      24,
+      30
+    ]),
+    valueSemantics:{
+      representation:'lower-bound',
+      derivation:'native',
+      sourceQuantity:'reflectivity',
+      sourceUnits:'dBZ',
+      intervalSemantics:{
+        kind:'class-interval',
+        boundUsed:'lower'
+      },
+      conversion:null
+    },
+    provenance:{
+      provider:'test',
+      product:'synthetic',
+      method:'normalized-evidence-contract-test'
+    }
+  }
+
+  const rows=detectStormCandidates(field,{
+    minAreaKm2:0,
+    maxAreaKm2:Infinity
+  })
+
+  assert.equal(rows.length,1)
+
+  const detection=rows[0].properties.detection
+  const evidence=rows[0].properties.evidence.reflectivity
+
+  assert.equal(detection.maxReflectivityDbz,30)
+  assert.equal(detection.maxReflectivityLowerBoundDbz,30)
+  assert.equal(evidence.maxDbz,30)
+  assert.equal(evidence.maxLowerBoundDbz,30)
+  assert.equal(evidence.representation,'lower-bound')
+})
+
+
+test('detector consumes provider-neutral values and measurement semantics',()=>{
+  const {
+    detectStormCandidates
+  }=require('../lib/storm-detector')
+
+  const field={
+    schema:'storm-normalized-evidence/1',
+    domain:'radar',
+    quantity:'reflectivity',
+    units:'dBZ',
+    observedAt:'2026-09-24T20:02:00.000Z',
+    width:2,
+    height:1,
+    bounds:[0,0,2,1],
+    values:Float32Array.from([
+      25,
+      31.5
+    ]),
+    valueSemantics:{
+      representation:'measurement',
+      derivation:'native',
+      sourceQuantity:'reflectivity',
+      sourceUnits:'dBZ',
+      intervalSemantics:null,
+      conversion:null
+    },
+    provenance:{
+      provider:'test',
+      product:'synthetic',
+      method:'normalized-evidence-contract-test'
+    }
+  }
+
+  const rows=detectStormCandidates(field,{
+    minAreaKm2:0,
+    maxAreaKm2:Infinity
+  })
+
+  assert.equal(rows.length,1)
+
+  const detection=rows[0].properties.detection
+  const evidence=rows[0].properties.evidence.reflectivity
+
+  assert.equal(detection.maxReflectivityDbz,31.5)
+  assert.equal(
+    detection.maxReflectivityLowerBoundDbz,
+    undefined
+  )
+
+  assert.equal(evidence.maxDbz,31.5)
+  assert.equal(
+    evidence.maxLowerBoundDbz,
+    undefined
+  )
+
+  assert.equal(
+    evidence.representation,
+    'measurement'
+  )
+})
+
+test('detector consumes provider-neutral values and estimate semantics',()=>{
+  const {
+    detectStormCandidates
+  }=require('../lib/storm-detector')
+
+  const field={
+    schema:'storm-normalized-evidence/1',
+    domain:'radar',
+    quantity:'reflectivity',
+    units:'dBZ',
+    observedAt:'2026-09-24T20:05:00.000Z',
+    width:2,
+    height:1,
+    bounds:[0,0,2,1],
+    values:Float32Array.from([
+      24,
+      28.5
+    ]),
+    valueSemantics:{
+      representation:'estimate',
+      derivation:'converted',
+      sourceQuantity:'rainfallRate',
+      sourceUnits:'mm/h',
+      intervalSemantics:null,
+      conversion:{
+        method:'marshall-palmer-z-r',
+        relation:'Z=200*R^1.6'
+      }
+    },
+    provenance:{
+      provider:'test',
+      product:'synthetic',
+      method:'normalized-evidence-contract-test'
+    }
+  }
+
+  const rows=detectStormCandidates(field,{
+    minAreaKm2:0,
+    maxAreaKm2:Infinity
+  })
+
+  assert.equal(rows.length,1)
+
+  const detection=rows[0].properties.detection
+  const evidence=rows[0].properties.evidence.reflectivity
+
+  assert.equal(detection.maxReflectivityDbz,28.5)
+  assert.equal(
+    detection.maxReflectivityLowerBoundDbz,
+    undefined
+  )
+  assert.equal(evidence.maxDbz,28.5)
+  assert.equal(evidence.maxLowerBoundDbz,undefined)
+  assert.equal(evidence.representation,'estimate')
 })
 
 test('detector preserves estimated reflectivity semantics',()=>{

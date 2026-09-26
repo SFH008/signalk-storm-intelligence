@@ -45,3 +45,45 @@ test('IPMA rain-rate bounds convert through common Z-R normalization',()=>{
   const strong=rainRateToDbz(10)
   assert.ok(Math.abs(strong-39.01)<0.05)
 })
+
+test('IPMA normalizer declares provider-neutral lower-bound semantics',()=>{
+  const fs=require('node:fs')
+  const path=require('node:path')
+
+  const source=fs.readFileSync(
+    path.join(__dirname,'../lib/ipma-pcr-evidence.js'),
+    'utf8'
+  )
+
+  assert.ok(
+    source.includes("schema:'storm-normalized-evidence/1'")
+  )
+
+  assert.ok(
+    source.includes("domain:'radar'")
+  )
+
+  assert.ok(
+    source.includes('values:reflectivityLowerBoundDbz')
+  )
+
+  assert.ok(
+    source.includes("representation:'lower-bound'")
+  )
+
+  assert.ok(
+    source.includes("derivation:'converted'")
+  )
+
+  assert.ok(
+    source.includes("sourceQuantity:'rainfallRate'")
+  )
+
+  assert.ok(
+    source.includes("sourceUnits:'mm/h'")
+  )
+
+  assert.ok(
+    source.includes("relation:'Z=200*R^1.6'")
+  )
+})

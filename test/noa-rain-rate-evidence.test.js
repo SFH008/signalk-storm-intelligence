@@ -73,6 +73,7 @@ test('NOA native RGB PNG normalizes to reflectivity estimate',async()=>{
   )
 
   assert.equal(field.schema,'storm-normalized-evidence/1')
+  assert.equal(field.domain,'radar')
   assert.equal(field.quantity,'reflectivity')
   assert.equal(field.units,'dBZ')
   assert.equal(
@@ -82,6 +83,23 @@ test('NOA native RGB PNG normalizes to reflectivity estimate',async()=>{
 
   assert.equal(field.width,3)
   assert.equal(field.height,1)
+
+  assert.equal(field.values,field.reflectivityDbz)
+
+  assert.deepEqual(
+    field.valueSemantics,
+    {
+      representation:'estimate',
+      derivation:'converted',
+      sourceQuantity:'rainfallRate',
+      sourceUnits:'mm/h',
+      intervalSemantics:null,
+      conversion:{
+        method:'marshall-palmer-z-r',
+        relation:'Z=200*R^1.6'
+      }
+    }
+  )
 
   assert.ok(Number.isFinite(field.reflectivityDbz[0]))
   assert.ok(Number.isFinite(field.reflectivityDbz[1]))
