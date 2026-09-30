@@ -2,6 +2,19 @@ Architecture Addendum B — StormEngine v2
 
 Status: ARCHITECTURE LOCKED
 
+Implementation status: **SUPERSEDED FOR THE ACTIVE PCR RUNTIME**.
+
+This document is retained as the historical design record for the experimental
+StormEngine v2 temporal architecture. It is not the implementation authority
+for the current IPMA PCR path.
+
+The active PCR temporal runtime is governed by
+`docs/storm-tracker-v3-workplan.md` and is implemented by Storm Engine v3 /
+Storm Tracker v3.
+
+Inference Engine v2 remains active; only the temporal StormEngine v2 runtime
+described by this document has been superseded.
+
 1. Purpose
 
 StormEngine v2 is the deterministic temporal state engine.

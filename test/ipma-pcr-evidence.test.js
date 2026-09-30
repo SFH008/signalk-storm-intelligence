@@ -87,3 +87,41 @@ test('IPMA normalizer declares provider-neutral lower-bound semantics',()=>{
     source.includes("relation:'Z=200*R^1.6'")
   )
 })
+
+test('IPMA PCR native Mercator rows are resampled to linear geographic latitude',()=>{
+  const {
+    sourceRowForGeographicLatitude
+  }=require('../lib/ipma-pcr-evidence')
+
+  const bounds=[
+    -12.454795,
+    34.011513,
+    -4.345465,
+    43.792862
+  ]
+
+  const height=2331
+
+  const midLatitude=
+    (bounds[1]+bounds[3])/2
+
+  const row=
+    sourceRowForGeographicLatitude(
+      midLatitude,
+      bounds,
+      height
+    )
+
+  /*
+   * A simple linear-latitude interpretation would place the geographic
+   * midpoint at row 1165.5. Native PCR rows follow Mercator Y instead,
+   * so the corresponding native row is farther south in the raster.
+   */
+  assert.ok(
+    Math.abs(row-1205.75)<1
+  )
+
+  assert.ok(
+    row>height/2
+  )
+})

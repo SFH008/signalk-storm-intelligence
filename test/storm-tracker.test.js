@@ -7,7 +7,17 @@ const {
   StormTracker
 }=require('../lib/storm-tracker')
 
-const engine=require('../lib/storm-engine')
+const {
+  centroidGeometry,
+  polygonIoU,
+  translateGeometryLocal
+}=require('../lib/storm-geometry')
+
+const {
+  haversine,
+  robustTrackVelocity,
+  localPoint
+}=require('../lib/storm-motion')
 
 function polygon(id,x1,y1=40,width=.10,height=.10){
   return {
@@ -36,91 +46,12 @@ function tracker(config={}){
       ...config
     },
     {
-      centroidGeometry:engine.centroidGeometry,
-      polygonIoU:(a,b)=>{
-        /*
-         * polygonIoU is intentionally not public StormEngine API.
-         * Reproduce the locked overlap condition for this direct
-         * tracker unit boundary using the existing geometry helper
-         * through a tiny local implementation below.
-         */
-        const polygonClipping=require('polygon-clipping')
-
-        const ca=engine.centroidGeometry(a)
-        if(!ca)return 0
-
-        const unwrap=(lon,ref)=>{
-          let v=Number(lon)
-          while(v-ref>=180)v-=360
-          while(v-ref< -180)v+=360
-          return v
-        }
-
-        const normalize=g=>{
-          if(!g||!['Polygon','MultiPolygon'].includes(g.type))
-            return null
-          const polys=g.type==='Polygon'
-            ? [g.coordinates]
-            : g.coordinates
-          return polys.map(poly=>
-            poly.map(ring=>
-              ring.map(p=>[
-                unwrap(Number(p[0]),ca[0]),
-                Number(p[1])
-              ])
-            )
-          )
-        }
-
-        const areaRing=ring=>{
-          let area=0
-          for(let i=0;i<ring.length;i++){
-            const p=ring[i]
-            const q=ring[(i+1)%ring.length]
-            area+=p[0]*q[1]-q[0]*p[1]
-          }
-          return Math.abs(area)/2
-        }
-
-        const area=mp=>{
-          let total=0
-          for(const poly of mp||[]){
-            if(!poly?.length)continue
-            total+=areaRing(poly[0]||[])
-            for(let i=1;i<poly.length;i++)
-              total-=areaRing(poly[i]||[])
-          }
-          return Math.max(0,total)
-        }
-
-        try{
-          const aa=normalize(a)
-          const bb=normalize(b)
-          const inter=polygonClipping.intersection(aa,bb)
-          const union=polygonClipping.union(aa,bb)
-          const u=area(union)
-          return u>0?area(inter)/u:0
-        }catch{
-          return 0
-        }
-      },
-      haversine:engine.haversine,
-      robustTrackVelocity:engine.robustTrackVelocity,
-      translateGeometryLocal:engine.translateGeometryLocal,
-      localPoint:(origin,east,north)=>{
-        const R=6371008.8
-        const rad=d=>d*Math.PI/180
-        const deg=r=>r*180/Math.PI
-        const lat=origin[1]+deg(north/R)
-        const cos=Math.max(
-          .05,
-          Math.cos(rad((origin[1]+lat)/2))
-        )
-        let lon=origin[0]+deg(east/(R*cos))
-        while(lon>180)lon-=360
-        while(lon<-180)lon+=360
-        return [lon,lat]
-      }
+      centroidGeometry,
+      polygonIoU,
+      haversine,
+      robustTrackVelocity,
+      localPoint,
+      translateGeometryLocal
     }
   )
 }
@@ -741,4 +672,109 @@ test('coverage-edge disappearance expires cleanly without false merge lineage',(
   assert.ok(closed)
   assert.equal(closed.lifecycle.status,'expired')
   assert.equal(closed.lifecycle.mergedInto,null)
+})
+
+test('tracker v2 snapshot round-trip preserves state and monotonic track ids',()=>{
+  const t=tracker({
+    maxMissedFrames:0
+  })
+
+  /*
+   * Issue storm-1, then expire it so closed-track state must survive.
+   */
+  const first=t.update(
+    [polygon('old',12.00)],
+    0
+  )
+
+  assert.equal(first[0].trackId,'storm-1')
+
+  t.update([],300000)
+
+  /*
+   * Create an active storm with enriched Storm Model v2 history.
+   */
+  const activeFeature=polygon('active',14.00)
+
+  activeFeature.properties={
+    observedAt:'2026-09-27T11:10:00.000Z',
+
+    detection:{
+      areaKm2:12.5
+    },
+
+    evidence:{
+      reflectivity:{
+        available:true,
+        maxDbz:42,
+        units:'dBZ',
+        representation:'derived-reflectivity-estimate'
+      }
+    }
+  }
+
+  const active=t.update(
+    [activeFeature],
+    600000
+  )
+
+  assert.equal(active[0].trackId,'storm-2')
+
+  const snapshot=t.snapshotState()
+
+  assert.equal(snapshot.version,2)
+  assert.equal(snapshot.nextTrack,3)
+
+  assert.equal(snapshot.activeTracks.length,1)
+  assert.equal(snapshot.closedTracks.length,1)
+
+  const history=snapshot.activeTracks[0].history
+
+  assert.equal(history.length,1)
+
+  assert.equal(
+    history[0].observedAt,
+    '2026-09-27T11:10:00.000Z'
+  )
+
+  assert.deepEqual(
+    history[0].geometry,
+    activeFeature.geometry
+  )
+
+  assert.equal(
+    history[0].areaKm2,
+    12.5
+  )
+
+  assert.deepEqual(
+    history[0].reflectivity,
+    activeFeature.properties.evidence.reflectivity
+  )
+
+  /*
+   * Restore into a completely fresh tracker.
+   */
+  const restored=tracker({
+    maxMissedFrames:0
+  })
+
+  restored.restoreState(snapshot)
+
+  assert.deepEqual(
+    restored.snapshotState(),
+    snapshot
+  )
+
+  /*
+   * A genuinely new storm must continue from the persisted counter.
+   * It must never reuse storm-1 or storm-2 after process restart.
+   */
+  const next=restored.update(
+    [polygon('new',30.00)],
+    900000
+  )
+
+  assert.equal(next.length,1)
+  assert.equal(next[0].trackId,'storm-3')
 })

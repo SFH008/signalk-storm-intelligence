@@ -2,6 +2,15 @@
 
 **Status: ARCHITECTURE LOCKED**
 
+**Current runtime note:** InferenceEngine v2 remains part of the active
+provider-neutral architecture. References in this document to StormEngine v2
+describe the originally planned downstream temporal runtime. For IPMA PCR,
+accepted observations now proceed into Storm Engine v3 / Storm Tracker v3 as
+defined by `docs/storm-tracker-v3-workplan.md`.
+
+This note does not change the responsibilities or scientific contract of
+InferenceEngine v2.
+
 ## 1. Purpose
 
 InferenceEngine v2 is the scientific reasoning layer.

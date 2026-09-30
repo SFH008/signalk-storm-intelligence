@@ -42,6 +42,7 @@ Provenance is not optional decoration. It is required to explain conflicting evi
 `trackId` is a local persistent identity created by the tracking process. It is distinct from an upstream provider feature ID, which may be unstable or absent.
 
 A track should preserve observation history sufficient to estimate motion and uncertainty. Split/merge events are difficult scientific cases and must not be hidden behind arbitrary continuity rules in evaluation.
+dots1234
 
 Ordinary temporal association and split/merge lineage are distinct decisions. Distance-only proximity may be sufficient to keep a possible temporal association candidate, but MUST NOT by itself establish split or merge lineage. A new child receives `parentTrackId`, or a disappearing parent receives `mergedInto`, only when there is positive polygon overlap supporting that lineage relationship. Predicted-footprint lineage may be introduced explicitly in a later algorithm version; until then, absence of overlap leaves lineage unknown rather than inferred from proximity alone.
 

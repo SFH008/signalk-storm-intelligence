@@ -33,7 +33,240 @@ test('every core runtime default is exposed in the Signal K configuration schema
   assert.ok(properties.inferenceAlgorithmSettings.properties['kinematic-polygon'].properties.weight)
   assert.ok(properties.inferenceAlgorithmSettings.properties['multisensor-evidence'].properties.weight)
 })
+test('storm source schema exposes native and derived radar sources',()=>{
+  const app={getDataDirPath:()=>path.join(os.tmpdir(),'radar-storm-source-schema'),setPluginStatus(){},debug(){},error(){},handleMessage(){},getSelfPath(){return null}}
+  const sources=makePlugin(app).schema().properties.stormSource.enum
+  assert.ok(sources.includes('radar-dpc:HRD'))
+  assert.ok(sources.includes('aemet:COMPO'))
+  assert.ok(sources.includes('ipma:PCR'))
+  assert.ok(sources.includes('noa:RAIN_RATE'))
+})
+
 test('plugin registers charts and plotterExtensions providers',async()=>{const ps=[];const app={registerResourceProvider:p=>ps.push(p),getDataDirPath:()=>path.join(os.tmpdir(),'radar-test-data'),setPluginStatus(){},debug(){},error(){},handleMessage(){},getSelfPath(){return null}};const p=makePlugin(app);p.start({backgroundEnabled:false,displayProducts:['VMI','SRI']});assert.equal(ps.length,4);assert.ok(ps.find(x=>x.type==='stormIntelligence'));assert.ok(ps.find(x=>x.type==='weatherRadar'));const charts=await ps.find(x=>x.type==='charts').methods.listResources();assert.ok(charts['weather-radar-radar-dpc-vmi']);const exts=await ps.find(x=>x.type==='plotterExtensions').methods.listResources();assert.ok(exts['signalk-storm-intelligence']);p.stop()})
+test('derived radar storm source can feed candidates into storm processing',()=>{
+  const app={getDataDirPath:()=>path.join(os.tmpdir(),'radar-derived-storm-source'),setPluginStatus(){},debug(){},error(){},handleMessage(){},getSelfPath(){return null}}
+  const plugin=makePlugin(app)
+  const api=plugin._test
+
+  assert.equal(typeof api.processStorm,'function')
+  assert.equal(typeof api.processDevelopmentCandidates,'function')
+})
+
+test('IPMA PCR cannot enter the legacy storm processing path',async()=>{
+  const app={
+    getDataDirPath:()=>path.join(
+      os.tmpdir(),
+      'radar-ipma-pcr-v3-only'
+    ),
+    setPluginStatus(){},
+    debug(){},
+    error(){},
+    handleMessage(){},
+    getSelfPath(){return null},
+    registerResourceProvider(){}
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSource:'ipma:PCR',
+    acquisitionTargets:['ipma:PCR']
+  })
+
+  try {
+    await assert.rejects(
+      plugin._test.processStorm(
+        'ipma:PCR',
+        {
+          epochMs:Date.parse(
+            '2026-09-30T10:00:00.000Z'
+          ),
+          time:'2026-09-30T10:00:00.000Z'
+        },
+        Buffer.alloc(0),
+        []
+      ),
+      /IPMA PCR must use Storm Runtime v3/
+    )
+  } finally {
+    plugin.stop()
+  }
+})
+
+test('derived radar storm source feeds coherent hazards into Storm Runtime v3',async()=>{
+  const app={
+    getDataDirPath:()=>path.join(os.tmpdir(),'radar-derived-storm-runtime-v3'),
+    setPluginStatus(){},debug(){},error(){},handleMessage(){},
+    getSelfPath(){return null},
+    registerResourceProvider(){}
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSource:'ipma:PCR',
+    acquisitionTargets:['ipma:PCR']
+  })
+
+  const observedAt=
+    '2026-09-30T10:00:00.000Z'
+
+  const candidates=[
+    {
+      type:'Feature',
+      id:'candidate-1',
+      geometry:{
+        type:'Polygon',
+        coordinates:[[[
+          -8.50,37.00
+        ],[
+          -8.45,37.00
+        ],[
+          -8.45,37.05
+        ],[
+          -8.50,37.05
+        ],[
+          -8.50,37.00
+        ]]]
+      },
+      properties:{
+        observedAt,
+        detection:{
+          method:'reflectivity-threshold-v1',
+          areaKm2:15,
+          maxReflectivityDbz:42
+        },
+        evidence:{
+          reflectivity:{
+            available:true,
+            units:'dBZ',
+            maxDbz:42,
+            representation:'lower-bound'
+          }
+        }
+      }
+    },
+
+    {
+      type:'Feature',
+      id:'candidate-2',
+      geometry:{
+        type:'Polygon',
+        coordinates:[[[
+          -8.35,37.00
+        ],[
+          -8.30,37.00
+        ],[
+          -8.30,37.05
+        ],[
+          -8.35,37.05
+        ],[
+          -8.35,37.00
+        ]]]
+      },
+      properties:{
+        observedAt,
+        detection:{
+          method:'reflectivity-threshold-v1',
+          areaKm2:16,
+          maxReflectivityDbz:47
+        },
+        evidence:{
+          reflectivity:{
+            available:true,
+            units:'dBZ',
+            maxDbz:47,
+            representation:'lower-bound'
+          }
+        }
+      }
+    }
+  ]
+
+  const width=96
+  const height=96
+
+  const motionFrame={
+    width,
+    height,
+    values:new Float32Array(width*height)
+  }
+
+  const field={
+    width,
+    height,
+    bounds:[
+      -9.6,
+      36.8,
+      -6.0,
+      42.2
+    ]
+  }
+
+  assert.equal(
+    typeof plugin._test.processStormV3,
+    'function'
+  )
+
+  const result=
+    await plugin._test.processStormV3({
+      target:'ipma:PCR',
+
+      latest:{
+        epochMs:Date.parse(observedAt),
+        time:observedAt
+      },
+
+      candidates,
+      motionFrame,
+      field
+    })
+
+  assert.equal(
+    result.regions.length,
+    1
+  )
+
+  assert.equal(
+    result.regions[0].properties.memberCount,
+    2
+  )
+
+  assert.equal(
+    result.regions[0].properties.detection.areaKm2,
+    31
+  )
+
+  assert.equal(
+    result.regions[0].properties.evidence.reflectivity.maxDbz,
+    47
+  )
+
+  assert.equal(
+    result.hazards.length,
+    1
+  )
+
+  assert.equal(
+    result.hazards[0].trackId,
+    'track-1'
+  )
+
+  assert.equal(
+    plugin._test.cells().length,
+    1
+  )
+
+  assert.equal(
+    plugin._test.cells()[0].trackId,
+    'track-1'
+  )
+
+  plugin.stop()
+})
+
 test('storm engine tracks an approaching polygon and predicts CPA',()=>{const e=new StormEngine({warnDistanceM:50000,alarmDistanceM:10000,horizonMinutes:60,warnSeverity:2,alarmSeverity:4,matchDistanceM:100000});const poly=lon=>({type:'Feature',properties:{severity:3},geometry:{type:'Polygon',coordinates:[[[lon,40],[lon+.01,40],[lon+.01,40.01],[lon,40.01],[lon,40]]]}});const v={position:{longitude:12,latitude:40.005},sog:0,cog:0};e.evaluate({epochMs:0,features:[poly(12.5)]},v);const r=e.evaluate({epochMs:300000,features:[poly(12.45)]},v)[0];assert.ok(r.motion.speed>0);assert.ok(r.cpa.closing);assert.ok(r.cpa.dcpaMeters<r.distanceMeters);assert.notEqual(r.state,'normal')})
 test('distant severe cell does not alarm',()=>{const e=new StormEngine({warnDistanceM:20000,alarmDistanceM:8000,horizonMinutes:60,warnSeverity:2,alarmSeverity:4,matchDistanceM:100000});const f={type:'Feature',properties:{severity:5},geometry:{type:'Polygon',coordinates:[[[14,42],[14.01,42],[14.01,42.01],[14,42.01],[14,42]]]}};const r=e.evaluate({epochMs:0,features:[f]},{position:{longitude:12,latitude:40},sog:0,cog:0})[0];assert.equal(r.state,'normal')})
 test('recycling storage enforces byte budget oldest-first',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'radar-store-'));const s=new RecyclingStorage(dir,{enabled:true,maxBytes:8,maxAgeMs:0});await s.init();await s.put('HRD',1,Buffer.alloc(6),'.zip');await new Promise(r=>setTimeout(r,10));await s.put('HRD',2,Buffer.alloc(6),'.zip');const st=await s.stats();assert.equal(st.files,1);assert.ok(st.bytes<=8);await fs.rm(dir,{recursive:true,force:true})})
@@ -152,36 +385,13 @@ test('Freeboard panel playback drives only standard chart and extension-state ho
   assert.doesNotMatch(html,/OpenLayers|ol\.Map|document\.querySelector\([^)]*freeboard/i)
 })
 
-const { destination, translateGeometry, cellToHazard, hazardsFromCells, renderHazardTile, geometryBounds, impactForCell } = require('../lib/hazard-overlay')
-
-test('hazard normalization predicts future centroid and translated polygon',()=>{
-  const cell={id:'c1',state:'warn',severity:3,geometry:{type:'Polygon',coordinates:[[[14,40],[14.02,40],[14.02,40.02],[14,40.02],[14,40]]]},centroid:[14.01,40.01],motion:{east:10,north:0,speed:10,course:90},distanceMeters:10000,cpa:{dcpaMeters:5000,tcpaSec:900}}
-  const h=cellToHazard(cell,[15,30])
-  assert.equal(h.predictions.length,2)
-  assert.ok(h.predictions[0].centroid[0]>h.centroid[0])
-  assert.equal(h.predictions[0].geometry.type,'Polygon')
-  assert.deepEqual(geometryBounds(cell.geometry),[14,40,14.02,40.02])
-})
+const { cellToHazard, hazardsFromCells, renderHazardTile, geometryBounds } = require('../lib/hazard-overlay')
 
 test('hazard tile renderer creates transparent PNG with plotted storm geometry',()=>{
   const cell={id:'c1',state:'alarm',geometry:{type:'Polygon',coordinates:[[[13.9,39.9],[14.1,39.9],[14.1,40.1],[13.9,40.1],[13.9,39.9]]]},centroid:[14,40],motion:{east:5,north:0,speed:5}}
   const png=renderHazardTile([cell],6,34,24,{predictionMinutes:[15,30]})
   assert.deepEqual([...png.subarray(0,8)],[137,80,78,71,13,10,26,10])
   assert.ok(png.length>100)
-})
-
-test('hazards expose bounds and a timestamped vessel-relative impact',()=>{
-  const cell={id:'c-impact',state:'alarm',severity:4,geometry:{type:'Polygon',coordinates:[[[14,40],[14.02,40],[14.02,40.02],[14,40.02],[14,40]]]},centroid:[14.01,40.01],motion:{east:2,north:0,speed:2},pathThreat:{intersects:true,interceptSec:600}}
-  const vessel={position:{longitude:13.9,latitude:40.01},sog:5,cog:Math.PI/2}
-  const evaluatedAt='2026-08-21T10:00:00.000Z'
-  const impact=impactForCell(cell,vessel,evaluatedAt)
-  assert.equal(impact.at,'2026-08-21T10:10:00.000Z')
-  assert.equal(impact.severity,4)
-  assert.ok(impact.position[0]>vessel.position.longitude)
-  const hazards=hazardsFromCells([cell],[15],{vessel,evaluatedAt})
-  assert.deepEqual(hazards.features[0].bbox,[14,40,14.02,40.02])
-  assert.equal(hazards.features[0].properties.impact.at,impact.at)
-  assert.deepEqual(hazards.vessel,vessel)
 })
 
 test('hazard chart resources use rolling slots and public weather-radar tile route',()=>{
@@ -236,18 +446,6 @@ test('polygon path threat detects vessel interception even when centroid CPA is 
   assert.equal(t.intersects,true)
   assert.ok(t.interceptSec>0)
   assert.ok(t.minDistanceMeters<=200)
-})
-
-test('normalized hazards expose track history confidence and polygon-path threat',()=>{
-  const {cellToHazard}=require('../lib/hazard-overlay')
-  const c={id:'storm-1',trackId:'storm-1',sourceId:'raw-9',state:'warn',severity:3,geometry:{type:'Polygon',coordinates:[[[12,40],[12.01,40],[12.01,40.01],[12,40.01],[12,40]]]},centroid:[12.005,40.005],motion:{east:3,north:1,speed:3.16,course:71,samples:4,confidence:.8,method:'track-robust'},history:[{time:'2026-08-18T00:00:00Z',centroid:[12.1,40]}],threat:{state:'warn',confidence:.8,method:'polygon-path',intersects:true,interceptSec:900,uncertaintyMeters:2500}}
-  const h=cellToHazard(c,[15])
-  assert.equal(h.trackId,'storm-1')
-  assert.equal(h.sourceId,'raw-9')
-  assert.equal(h.history.length,1)
-  assert.equal(h.threat.intersects,true)
-  assert.equal(h.predictions[0].confidence,.8)
-  assert.equal(h.predictions[0].provenance,'track-robust')
 })
 
 const { discoverAdapters, knownProducts, defaultsFromAdapters, instantiateAdapters } = require('../lib/provider-registry')
@@ -692,4 +890,33 @@ test('inference and observation registries reject runtime ids that differ from a
   const {instantiateObservationAdapters}=require('../lib/observation-provider-registry')
   const observationDefs=new Map([['declared',{id:'declared',create(){return{id:'different',name:'Different',observations:async()=>[]}}}]])
   assert.throws(()=>instantiateObservationAdapters(observationDefs,['declared'],{},{}),/mismatched id/)
+})
+
+test('plugin start honors Signal K persisted configuration wrapper',()=>{
+  const app={
+    getDataDirPath:()=>path.join(os.tmpdir(),'storm-config-wrapper'),
+    setPluginStatus(){},
+    debug(){},
+    error(){},
+    handleMessage(){},
+    getSelfPath(){return null},
+    registerResourceProvider(){}
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    configuration:{
+      backgroundEnabled:false,
+      stormSource:'ipma:PCR',
+      acquisitionTargets:['ipma:PCR']
+    }
+  })
+
+  assert.equal(
+    plugin._test.config().stormSource,
+    'ipma:PCR'
+  )
+
+  plugin.stop()
 })

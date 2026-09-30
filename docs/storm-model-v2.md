@@ -5,7 +5,11 @@
 This document freezes the provider-neutral meteorological Storm Model v2
 contract.
 
-It sits downstream of:
+**Implementation status:** this contract is retained as a historical/frozen
+design record. It is not the authoritative output contract of the current IPMA
+PCR Storm Engine v3 / Storm Tracker v3 runtime.
+
+It sits downstream of the historical StormEngine v2 modular sequence:
 
     Normalized Storm Evidence v1
             |

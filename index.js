@@ -11,7 +11,16 @@ const { playbackSlots, resolveSlot, playbackChartId, playbackChartName } = requi
 const { assertProvider, describeProvider, productCapabilities } = require('./lib/provider-contract')
 const { hazardsFromCells, renderHazardTile, renderDevelopmentCandidateTile, renderRadarEchoStructureTile, geometryBounds } = require('./lib/hazard-overlay')
 const { normalizeAemetCompo } = require('./lib/aemet-compo-evidence')
-const { normalizeIpmaPcr } = require('./lib/ipma-pcr-evidence')
+const {
+  normalizeIpmaPcr,
+  motionFieldFromIpmaPcrEvidence
+} = require('./lib/ipma-pcr-evidence')
+const {
+  buildHazardRegions
+} = require('./lib/storm-tracker-v3/hazard-regions')
+const {
+  StormRuntimeV3
+} = require('./lib/storm-runtime-v3')
 const { normalizeNoaRainRate } = require('./lib/noa-rain-rate-evidence')
 const { detectRadarEchoStructures, detectStormCandidates } = require('./lib/storm-detector')
 const { discoverObservationAdapters, defaultsFromObservationAdapters, observationProviderSettingsSchema, instantiateObservationAdapters } = require('./lib/observation-provider-registry')
@@ -38,7 +47,7 @@ const DEFAULTS = Object.freeze({
   prefetchEnabled: true, prefetchTargets: ADAPTER_DEFAULTS.prefetchTargets, prefetchRadiusNm: 40, prefetchZooms: [5, 6, 7, 8],
   prefetchMaxTilesPerCycle: 1024, prefetchStorageMaxMB: 512, prefetchStorageMaxAgeHours: 6, prefetchConcurrency: 6,
   playbackEnabled: true, playbackSlots: 13, playbackTimelineMinutes: 180, playbackIntervalMs: 900,
-  hazardOverlayEnabled: true, hazardOverlaySlots: 24, hazardPredictionMinutes: [15, 30, 60], hazardOverlayOpacity: 0.8,
+  hazardOverlayEnabled: true, hazardOverlaySlots: 24, hazardOverlayOpacity: 0.8,
   candidateMinReflectivityDbz: 24,
   candidateMinAreaKm2: 5,
   candidateMaxAreaKm2: 1000,
@@ -242,7 +251,7 @@ function extensionManifest(pluginId, version) {
 module.exports = function (app) {
   const plugin = { id: 'signalk-storm-intelligence', name: 'Storm Intelligence', version: PACKAGE_VERSION }
   let cfg = { ...DEFAULTS }, providers = new Map(), observationProviders = new Map(), inferenceAlgorithms = new Map(), inferenceEngine, cache = makeCache(DEFAULTS.cacheEntries), charts = {}, storage, tileStore, environmentFusion, weatherApiFusion
-  let timer = null, startupTimer = null, running = false, busy = false, lastAcquired = {}, lastPrefetched = {}, cells = [], radarEchoStructures = [], radarEchoStructuresTime = null, developmentCandidates = [], developmentCandidatesTime = null, lightningStrikes = [], lightningState = 'normal', lightningMessage = '', environmentContext = {available:false}, weatherApiContext = {available:false}, hazardSnapshots = new Map(), hazardSequence = 0, activeHazardSlot = 0, lastAlarm = 'normal', lastAlarmText = '', lastError = null, assetsMounted = false
+  let timer = null, startupTimer = null, running = false, busy = false, lastAcquired = {}, lastPrefetched = {}, cells = [], radarEchoStructures = [], radarEchoStructuresTime = null, developmentCandidates = [], developmentCandidatesTime = null, lightningStrikes = [], lightningState = 'normal', lightningMessage = '', environmentContext = {available:false}, weatherApiContext = {available:false}, hazardSnapshots = new Map(), hazardSequence = 0, activeHazardSlot = 0, lastAlarm = 'normal', lastAlarmText = '', lastError = null, assetsMounted = false, stormRuntimeV3 = null
   const activeErrors = new Map()
   const syncLastError = () => { lastError = [...activeErrors.values()].at(-1)?.message || null }
   const err = (message, component = 'runtime') => { activeErrors.set(component, { message, at: new Date().toISOString() }); syncLastError(); app.error?.(message) }
@@ -399,12 +408,12 @@ module.exports = function (app) {
   }
 
   function currentHazards() {
-    return { source: cfg.stormSource, state: lastAlarm, activeSlot: activeHazardSlot, chartId: hazardChartId(activeHazardSlot), chartName: hazardChartName(activeHazardSlot), predictionMinutes: cfg.hazardPredictionMinutes, ...hazardsFromCells(cells, cfg.hazardPredictionMinutes, { vessel: vessel() }) }
+    return { source: cfg.stormSource, state: lastAlarm, activeSlot: activeHazardSlot, chartId: hazardChartId(activeHazardSlot), chartName: hazardChartName(activeHazardSlot), ...hazardsFromCells(cells, null, { vessel: vessel() }) }
   }
 
   function hazardOverlayStatus() {
     const snap = hazardSnapshots.get(activeHazardSlot)
-    return { enabled: cfg.hazardOverlayEnabled, activeSlot: activeHazardSlot, resourceId: hazardChartId(activeHazardSlot), name: hazardChartName(activeHazardSlot), time: snap?.time || cells[0]?.time || null, slots: Math.max(1, Math.min(72, Number(cfg.hazardOverlaySlots) || 1)), predictionMinutes: cfg.hazardPredictionMinutes, opacity: cfg.hazardOverlayOpacity }
+    return { enabled: cfg.hazardOverlayEnabled, activeSlot: activeHazardSlot, resourceId: hazardChartId(activeHazardSlot), name: hazardChartName(activeHazardSlot), time: snap?.time || cells[0]?.time || null, slots: Math.max(1, Math.min(72, Number(cfg.hazardOverlaySlots) || 1)), opacity: cfg.hazardOverlayOpacity }
   }
 
   function isoDurationMs(value) {
@@ -588,7 +597,7 @@ module.exports = function (app) {
         const slot=Number(req.params.slot),z=Number(req.params.z),x=Number(req.params.x),y=Number(req.params.y)
         if (![slot,z,x,y].every(Number.isInteger) || slot < 0 || slot >= cfg.hazardOverlaySlots || z < cfg.minZoom || z > cfg.maxZoom) return res.status(400).end()
         const snap=hazardSnapshots.get(slot)
-        const b=renderHazardTile(snap?.cells || [],z,x,y,{predictionMinutes:cfg.hazardPredictionMinutes,vessel:snap?.vessel,evaluatedAt:snap?.time})
+        const b=renderHazardTile(snap?.cells || [],z,x,y,{vessel:snap?.vessel,evaluatedAt:snap?.time})
         res.set('Content-Type','image/png'); res.set('Cache-Control','public, max-age=15'); res.send(b)
       } catch (e) { res.status(500).end() }
     })
@@ -719,16 +728,119 @@ module.exports = function (app) {
     developmentCandidatesTime=
       latest.time ||
       new Date(latest.epochMs).toISOString()
-
-
-    return true
+    return {
+      evidence,
+      candidates:developmentCandidates
+    }
   }
 
-  async function processStorm(target, latest, buffer) {
+  async function processStormV3({
+    target,
+    latest,
+    candidates,
+    motionFrame,
+    field
+  }={}) {
+    if(
+      !cfg.stormEnabled ||
+      target !== cfg.stormSource
+    ){
+      return null
+    }
+
+    if(
+      !latest ||
+      !Number.isFinite(Number(latest.epochMs))
+    ){
+      throw new TypeError(
+        'latest storm frame metadata is required'
+      )
+    }
+
+    if(!Array.isArray(candidates)){
+      throw new TypeError(
+        'storm candidates are required'
+      )
+    }
+
+    const observedAt=
+      latest.time ||
+      new Date(
+        Number(latest.epochMs)
+      ).toISOString()
+
+    const regionResult=
+      buildHazardRegions(
+        candidates,
+        {
+          observedAt
+        }
+      )
+
+    if(!stormRuntimeV3){
+      stormRuntimeV3=
+        new StormRuntimeV3()
+    }
+
+    const runtimeResult=
+      await stormRuntimeV3.processFrame({
+        observedAt,
+        regions:regionResult.regions,
+        motionFrame,
+        field,
+        now:Date.now()
+      })
+
+    const t=
+      splitTarget(target)
+
+    cells=
+      runtimeResult.hazards.map(
+        hazard=>({
+          ...hazard,
+          provider:t?.providerId ?? null,
+          product:t?.product ?? null,
+          time:observedAt
+        })
+      )
+
+    publishHazardSnapshot(
+      observedAt
+    )
+
+    return {
+      ...runtimeResult,
+      regions:regionResult.regions,
+      suppressed:regionResult.suppressed,
+      regionDiagnostics:
+        regionResult.diagnostics
+    }
+  }
+
+
+  async function processStorm(target, latest, buffer, derivedCandidates = null) {
+    /*
+     * IPMA PCR is a V3-only storm source.
+     *
+     * Its normalized evidence, hazard-region construction, motion field,
+     * identity and authoritative forecasts belong to Storm Runtime v3.
+     * Never allow PCR to fall through to the legacy storm engine.
+     */
+    if (target === 'ipma:PCR') {
+      throw new Error(
+        'IPMA PCR must use Storm Runtime v3'
+      )
+    }
+
     if (!cfg.stormEnabled || target !== cfg.stormSource) return
     const t = splitTarget(target), provider = getProvider(t.providerId), meta = getProduct(provider, t.product)
-    if (!productCapabilities(provider, meta).cells) return
-    const features = await provider.cellsFromRaw(t.product, buffer)
+    const caps = productCapabilities(provider, meta)
+    let features
+    if (caps.cells) features = await provider.cellsFromRaw(t.product, buffer)
+    else if (caps.stormCandidates) {
+      if (!Array.isArray(derivedCandidates)) throw new Error(`derived storm candidates unavailable for ${target}`)
+      features = derivedCandidates
+    } else return
     const inferred = await inferenceEngine.infer({ snapshot:{epochMs:latest.epochMs,features}, vessel:vessel(), lightningStrikes, environmentContext, weatherApiContext, config:cfg, now:Date.now() })
     const inferenceHealth = inferenceEngine.describe().health
     if (!inferenceHealth.usable) {
@@ -758,9 +870,21 @@ module.exports = function (app) {
       const ext = typeof provider.rawExtension === 'function' ? provider.rawExtension(t.product, d.key) : '.bin'
       await storage.put(storageProduct, latest.epochMs, raw, ext)
     }
+    let processed=null
+
     try {
-      const processed=await processDevelopmentCandidates(target,latest,raw)
-      if(processed)recovered('development-candidates')
+      processed=
+        await processDevelopmentCandidates(
+          target,
+          latest,
+          raw
+        )
+
+      if(processed){
+        recovered(
+          'development-candidates'
+        )
+      }
     } catch(e) {
       err(
         `Development storm candidates ${target}: ${e.message}`,
@@ -768,7 +892,48 @@ module.exports = function (app) {
       )
     }
 
-    await processStorm(target, latest, raw)
+    if(
+      target===cfg.stormSource &&
+      t.providerId==='ipma' &&
+      t.product==='PCR'
+    ){
+      if(
+        !processed ||
+        !processed.evidence ||
+        !Array.isArray(processed.candidates)
+      ){
+        throw new Error(
+          'IPMA PCR normalized storm evidence unavailable'
+        )
+      }
+
+      const motionFrame=
+        motionFieldFromIpmaPcrEvidence(
+          processed.evidence
+        )
+
+      const field={
+        width:processed.evidence.width,
+        height:processed.evidence.height,
+        bounds:processed.evidence.bounds
+      }
+
+      await processStormV3({
+        target,
+        latest,
+        candidates:processed.candidates,
+        motionFrame,
+        field
+      })
+    }else{
+      await processStorm(
+        target,
+        latest,
+        raw,
+        processed?.candidates ?? null
+      )
+    }
+
     lastAcquired[target] = latest.epochMs
     return true
   }
@@ -856,6 +1021,21 @@ module.exports = function (app) {
   }
 
   plugin.start = function (settings = {}) {
+    /*
+     * Signal K persists plugin settings in a wrapper containing
+     * `configuration`. Tests and direct callers may still supply
+     * the configuration object itself, so support both forms.
+     */
+    if(
+      settings &&
+      typeof settings.configuration==='object' &&
+      settings.configuration!==null
+    ){
+      settings=settings.configuration
+    }
+
+    stormRuntimeV3=
+      new StormRuntimeV3()
     // Provider-specific legacy migrations belong to adapters. The only historical
     // core migration retained here is the old unqualified product-list shape; it
     // is assigned to the first adapter that explicitly declares itself legacyDefault.
@@ -885,7 +1065,7 @@ module.exports = function (app) {
       playbackTimelineMinutes: Math.max(5, Math.min(24 * 60, Number(settings.playbackTimelineMinutes) || DEFAULTS.playbackTimelineMinutes)),
       playbackIntervalMs: Math.max(250, Math.min(10000, Number(settings.playbackIntervalMs) || DEFAULTS.playbackIntervalMs)),
       hazardOverlaySlots: Math.max(1, Math.min(72, Number(settings.hazardOverlaySlots) || DEFAULTS.hazardOverlaySlots)),
-      hazardPredictionMinutes: Array.isArray(settings.hazardPredictionMinutes) ? [...new Set(settings.hazardPredictionMinutes.map(Number).filter(v => Number.isFinite(v) && v > 0 && v <= 180))].sort((a,b)=>a-b) : [...DEFAULTS.hazardPredictionMinutes],
+
       hazardOverlayOpacity: Number.isFinite(Number(settings.hazardOverlayOpacity)) ? Math.max(0, Math.min(1, Number(settings.hazardOverlayOpacity))) : DEFAULTS.hazardOverlayOpacity,
       stormHistoryFrames: Math.max(2, Math.min(24, Number(settings.stormHistoryFrames) || DEFAULTS.stormHistoryFrames)),
       stormPathStepSec: Math.max(15, Math.min(300, Number(settings.stormPathStepSec) || DEFAULTS.stormPathStepSec)),
@@ -973,7 +1153,7 @@ module.exports = function (app) {
 
   const allRasterTargets = Object.entries(KNOWN_PRODUCTS).flatMap(([pid, ps]) => Object.entries(ps).filter(([, p]) => p.kind === 'raster').map(([id]) => `${pid}:${id}`))
   const allRawTargets = Object.entries(KNOWN_PRODUCTS).flatMap(([pid, ps]) => Object.entries(ps).filter(([, p]) => p.raw === true).map(([id]) => `${pid}:${id}`))
-  const allCellTargets = Object.entries(KNOWN_PRODUCTS).flatMap(([pid, ps]) => Object.entries(ps).filter(([, p]) => p.cells === true).map(([id]) => `${pid}:${id}`))
+  const allStormTargets = Object.entries(KNOWN_PRODUCTS).flatMap(([pid, ps]) => Object.entries(ps).filter(([, p]) => p.cells === true || p.stormCandidates === true).map(([id]) => `${pid}:${id}`))
   plugin.schema = () => ({ type: 'object', properties: {
     enabledProviders: { title: 'Enabled radar mosaic providers', type: 'array', uniqueItems: true, default: DEFAULTS.enabledProviders, items: { type: 'string', enum: Object.keys(KNOWN_PRODUCTS) } },
     displayLayers: { title: 'Map overlay layers', type: 'array', uniqueItems: true, default: DEFAULTS.displayLayers, items: { type: 'string', enum: allRasterTargets } },
@@ -983,11 +1163,11 @@ module.exports = function (app) {
     storageEnabled: { title: 'Store acquired products', type: 'boolean', default: true }, storageMaxMB: { title: 'Maximum archive storage (MB, 0 unlimited)', type: 'integer', minimum: 0, default: 1024 }, storageMaxAgeHours: { title: 'Maximum archive age (hours, 0 unlimited)', type: 'number', minimum: 0, default: 24 },
     prefetchEnabled: { title: 'Geographic radar prefetch/offline cache', type: 'boolean', default: true }, prefetchTargets: { title: 'Raster products to prefetch around own ship', type: 'array', uniqueItems: true, default: DEFAULTS.prefetchTargets, items: { type: 'string', enum: [...allRasterTargets] } }, prefetchRadiusNm: { title: 'Prefetch radius around own ship (NM)', type: 'number', minimum: 1, maximum: 500, default: 40 }, prefetchZooms: { title: 'Prefetch zoom levels', type: 'array', uniqueItems: true, default: DEFAULTS.prefetchZooms, items: { type: 'integer', minimum: 0, maximum: 22 } }, prefetchMaxTilesPerCycle: { title: 'Maximum tiles per prefetch cycle', type: 'integer', minimum: 1, maximum: 20000, default: 1024 }, prefetchConcurrency: { title: 'Concurrent upstream prefetch requests', type: 'integer', minimum: 1, maximum: 32, default: 6 }, prefetchStorageMaxMB: { title: 'Maximum rendered prefetch storage (MB, 0 unlimited)', type: 'integer', minimum: 0, default: 512 }, prefetchStorageMaxAgeHours: { title: 'Maximum rendered prefetch age (hours, 0 unlimited)', type: 'number', minimum: 0, default: 6 },
     playbackEnabled: { title: 'Time-controlled weather overlay playback charts', type: 'boolean', default: true }, playbackSlots: { title: 'Playback frame slots exposed to plotters', type: 'integer', minimum: 1, maximum: 72, default: 13 }, playbackTimelineMinutes: { title: 'Playback timeline lookback (minutes)', type: 'integer', minimum: 5, maximum: 1440, default: 180 }, playbackIntervalMs: { title: 'Freeboard animation interval (milliseconds)', type: 'integer', minimum: 250, maximum: 10000, default: 900 },
-    hazardOverlayEnabled: { title: 'Storm-cell chart overlay', type: 'boolean', default: true }, hazardOverlaySlots: { title: 'Storm overlay rolling frame slots', type: 'integer', minimum: 1, maximum: 72, default: 24 }, hazardPredictionMinutes: { title: 'Predicted storm-cell envelopes (minutes)', type: 'array', uniqueItems: true, default: DEFAULTS.hazardPredictionMinutes, items: { type: 'number', minimum: 1, maximum: 180 } }, hazardOverlayOpacity: { title: 'Default storm-cell overlay opacity', type: 'number', minimum: 0, maximum: 1, default: 0.8 },
+    hazardOverlayEnabled: { title: 'Storm-cell chart overlay', type: 'boolean', default: true }, hazardOverlaySlots: { title: 'Storm overlay rolling frame slots', type: 'integer', minimum: 1, maximum: 72, default: 24 }, hazardOverlayOpacity: { title: 'Default storm-cell overlay opacity', type: 'number', minimum: 0, maximum: 1, default: 0.8 },
     candidateMinReflectivityDbz: { title: 'Storm candidate minimum reflectivity (dBZ)', type: 'number', minimum: -20, maximum: 80, default: DEFAULTS.candidateMinReflectivityDbz },
     candidateMinAreaKm2: { title: 'Storm candidate minimum area (km²)', type: 'number', minimum: 0, maximum: 10000, default: DEFAULTS.candidateMinAreaKm2 },
     candidateMaxAreaKm2: { title: 'Storm candidate maximum area (km²)', type: 'number', minimum: 1, maximum: 1000000, default: DEFAULTS.candidateMaxAreaKm2 },
-    stormEnabled: { title: 'Approaching storm-cell alarm', type: 'boolean', default: true }, stormHistoryFrames: { title: 'Storm tracking history frames', type: 'integer', minimum: 2, maximum: 24, default: 8 }, stormPathStepSec: { title: 'Storm/vessel path intersection step (seconds)', type: 'integer', minimum: 15, maximum: 300, default: 60 }, stormBaseUncertaintyNm: { title: 'Base storm-track uncertainty (NM)', type: 'number', minimum: 0, maximum: 20, default: 1 }, stormMaxUncertaintyNm: { title: 'Maximum storm-track uncertainty (NM)', type: 'number', minimum: 1, maximum: 50, default: 10 }, stormSource: { title: 'Storm-cell source', type: 'string', enum: allCellTargets, default: DEFAULTS.stormSource },
+    stormEnabled: { title: 'Approaching storm-cell alarm', type: 'boolean', default: true }, stormHistoryFrames: { title: 'Storm tracking history frames', type: 'integer', minimum: 2, maximum: 24, default: 8 }, stormPathStepSec: { title: 'Storm/vessel path intersection step (seconds)', type: 'integer', minimum: 15, maximum: 300, default: 60 }, stormBaseUncertaintyNm: { title: 'Base storm-track uncertainty (NM)', type: 'number', minimum: 0, maximum: 20, default: 1 }, stormMaxUncertaintyNm: { title: 'Maximum storm-track uncertainty (NM)', type: 'number', minimum: 1, maximum: 50, default: 10 }, stormSource: { title: 'Storm-cell source', type: 'string', enum: allStormTargets, default: DEFAULTS.stormSource },
     warnDistanceNm: { title: 'Warning CPA/distance (NM)', type: 'number', minimum: 1, default: 20 }, alarmDistanceNm: { title: 'Alarm CPA/distance (NM)', type: 'number', minimum: 0.5, default: 8 }, horizonMinutes: { title: 'Approach prediction horizon (minutes)', type: 'integer', minimum: 10, maximum: 180, default: 60 }, warnSeverity: { title: 'Warning severity threshold', type: 'number', default: 3 }, alarmSeverity: { title: 'Alarm severity threshold', type: 'number', default: 4 }, matchDistanceNm: { title: 'Cell tracking match radius (NM)', type: 'number', minimum: 1, default: 30 }, notificationPath: { title: 'Signal K notification path', type: 'string', default: DEFAULTS.notificationPath },
     lightningEnabled:{title:'Lightning observation fusion',type:'boolean',default:false}, lightningProviders:{title:'Enabled lightning observation providers',type:'array',uniqueItems:true,default:DEFAULTS.lightningProviders,items:{type:'string',enum:[...OBSERVATION_ADAPTERS.keys()]}}, lightningProviderSettings:observationProviderSettingsSchema(OBSERVATION_ADAPTERS), lightningLookbackMinutes:{title:'Lightning lookback (minutes)',type:'integer',minimum:5,maximum:180,default:30}, lightningQueryRadiusNm:{title:'Lightning query radius (NM)',type:'number',minimum:10,maximum:500,default:120}, lightningAssociationRadiusNm:{title:'Maximum strike-to-cell association distance (NM)',type:'number',minimum:.5,maximum:100,default:8}, lightningEvidenceWeight:{title:'Maximum lightning confidence contribution',type:'number',minimum:0,maximum:.3,default:.15}, lightningOverlayEnabled:{title:'Show lightning overlay in plotters',type:'boolean',default:true}, lightningOverlayOpacity:{title:'Lightning overlay opacity',type:'number',minimum:0,maximum:1,default:.9}, lightningWarningNm:{title:'Lightning warning radius (NM)',type:'number',minimum:1,default:15}, lightningAlarmNm:{title:'Lightning alarm radius (NM)',type:'number',minimum:.5,default:8}, lightningMinStrikes:{title:'Minimum recent strikes for proximity warning',type:'integer',minimum:1,default:2}, lightningNotificationPath:{title:'Lightning Signal K notification path',type:'string',default:DEFAULTS.lightningNotificationPath},
     onboardEnvironmentEnabled:{title:'Fuse onboard environmental sensors',type:'boolean',default:true}, onboardEnvironmentHistoryMinutes:{title:'Onboard environment trend window (minutes)',type:'integer',minimum:5,maximum:180,default:30}, onboardEnvironmentMaxAgeSeconds:{title:'Maximum onboard sample age (seconds)',type:'integer',minimum:10,maximum:3600,default:180}, onboardEnvironmentEvidenceWeight:{title:'Maximum onboard evidence confidence contribution',type:'number',minimum:0,maximum:.3,default:.12},
@@ -997,7 +1177,7 @@ module.exports = function (app) {
     minZoom: { type: 'integer', minimum: 0, maximum: 22, default: 4 }, maxZoom: { type: 'integer', minimum: 0, maximum: 22, default: 13 }, cacheSeconds: { type: 'integer', minimum: 0, maximum: 3600, default: 60 }, cacheEntries: { type: 'integer', minimum: 16, maximum: 10000, default: 512 }, requestTimeoutMs: { type: 'integer', minimum: 1000, maximum: 60000, default: 10000 }
   } })
 
-  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, config: () => cfg, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
+  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, config: () => cfg, processDevelopmentCandidates, processStorm, processStormV3, cells:()=>cells, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
   return plugin
 }
 

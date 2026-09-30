@@ -36,21 +36,28 @@ async function enforceWeatherLayerOrder(){
   const overlays=snapshot.overlays||[];
 
   const radarIds=[];
-  const satelliteIds=[];
+  const otherSatelliteIds=[];
+  const geoColourIds=[];
 
   for(const o of overlays){
     const pair=selectedPair(o);
     if(!pair?.chart?.id)continue;
 
-    if(o.family==='satellite') satelliteIds.push(pair.chart.id);
-    else radarIds.push(pair.chart.id);
+    if(o.key==='eumetsat:MTG_GEOCOLOR'){
+      geoColourIds.push(pair.chart.id);
+    }else if(o.family==='satellite'){
+      otherSatelliteIds.push(pair.chart.id);
+    }else{
+      radarIds.push(pair.chart.id);
+    }
   }
 
   const order=[
     ...hazards.map(c=>c.id),
     ...lightning.map(c=>c.id),
     ...radarIds,
-    ...satelliteIds
+    ...otherSatelliteIds,
+    ...geoColourIds
   ];
 
   if(order.length<2)return;

@@ -699,3 +699,111 @@ test('opposing area and intensity tendencies produce mixed state',()=>{
     'mixed'
   )
 })
+
+test('StormEvolution snapshotState round-trip preserves all storm histories',()=>{
+  const e=new StormEvolution({
+    historyFrames:4
+  })
+
+  e.update(
+    'storm-1',
+    observation({
+      observedAt:'2026-09-27T10:00:00Z',
+      areaKm2:10,
+      maxDbz:30
+    })
+  )
+
+  e.update(
+    'storm-1',
+    observation({
+      observedAt:'2026-09-27T10:05:00Z',
+      areaKm2:15,
+      maxDbz:35
+    })
+  )
+
+  e.update(
+    'storm-2',
+    observation({
+      observedAt:'2026-09-27T10:02:00Z',
+      areaKm2:20,
+      maxDbz:40
+    })
+  )
+
+  const snapshot=e.snapshotState()
+
+  assert.equal(snapshot.version,1)
+
+  assert.deepEqual(
+    Object.keys(snapshot.histories).sort(),
+    ['storm-1','storm-2']
+  )
+
+  const restored=new StormEvolution({
+    historyFrames:4
+  })
+
+  restored.restoreState(snapshot)
+
+  assert.deepEqual(
+    restored.snapshotState(),
+    snapshot
+  )
+
+  assert.deepEqual(
+    restored.snapshot('storm-1'),
+    e.snapshot('storm-1')
+  )
+
+  assert.deepEqual(
+    restored.snapshot('storm-2'),
+    e.snapshot('storm-2')
+  )
+})
+
+test('StormEvolution restored history continues evolution calculation',()=>{
+  const e=new StormEvolution()
+
+  e.update(
+    'storm-1',
+    observation({
+      observedAt:'2026-09-27T10:00:00Z',
+      areaKm2:10,
+      maxDbz:30
+    })
+  )
+
+  e.update(
+    'storm-1',
+    observation({
+      observedAt:'2026-09-27T10:05:00Z',
+      areaKm2:15,
+      maxDbz:35
+    })
+  )
+
+  const snapshot=e.snapshotState()
+
+  const restored=new StormEvolution()
+  restored.restoreState(snapshot)
+
+  const result=restored.update(
+    'storm-1',
+    observation({
+      observedAt:'2026-09-27T10:10:00Z',
+      areaKm2:20,
+      maxDbz:40
+    })
+  )
+
+  assert.ok(result)
+  assert.ok(result.areaTrend)
+  assert.ok(result.intensityTrend)
+
+  assert.equal(
+    restored.snapshot('storm-1').length,
+    3
+  )
+})

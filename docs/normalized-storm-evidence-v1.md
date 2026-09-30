@@ -232,7 +232,15 @@ Specifically:
 - downstream modules MUST NOT silently replace missing values with physical
   zero.
 
-## 10. Storm Engine v2 modular sequence
+## 10. Historical Storm Engine v2 modular sequence
+
+The following sequence records the original downstream decomposition used
+during StormEngine v2 development. It is retained for architectural history
+and does not define the active IPMA PCR temporal runtime.
+
+The Normalized Storm Evidence v1 contract itself remains authoritative and
+unchanged. Current PCR temporal processing is governed by Storm Engine v3 /
+Storm Tracker v3.
 
     normalized evidence
             |
