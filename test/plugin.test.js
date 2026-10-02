@@ -87,7 +87,50 @@ test('IPMA PCR cannot enter the legacy storm processing path',async()=>{
         Buffer.alloc(0),
         []
       ),
-      /IPMA PCR must use Storm Runtime v3/
+      /ipma:PCR must use Storm Runtime v3/
+    )
+  } finally {
+    plugin.stop()
+  }
+})
+
+
+test('AEMET COMPO cannot enter the legacy storm processing path',async()=>{
+  const app={
+    getDataDirPath:()=>path.join(
+      os.tmpdir(),
+      'radar-aemet-compo-v3-only'
+    ),
+    setPluginStatus(){},
+    debug(){},
+    error(){},
+    handleMessage(){},
+    getSelfPath(){return null},
+    registerResourceProvider(){}
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSource:'aemet:COMPO',
+    acquisitionTargets:['aemet:COMPO']
+  })
+
+  try {
+    await assert.rejects(
+      plugin._test.processStorm(
+        'aemet:COMPO',
+        {
+          epochMs:Date.parse(
+            '2026-10-01T06:00:00.000Z'
+          ),
+          time:'2026-10-01T06:00:00.000Z'
+        },
+        Buffer.alloc(0),
+        []
+      ),
+      /aemet:COMPO must use Storm Runtime v3/
     )
   } finally {
     plugin.stop()
@@ -267,6 +310,328 @@ test('derived radar storm source feeds coherent hazards into Storm Runtime v3',a
   plugin.stop()
 })
 
+
+test('Storm Runtime v3 applies vessel-relative threat before publishing cells',async()=>{
+  const notifications=[]
+
+  const ownship={
+    position:{
+      /*
+       * Roughly 12 NM west of the hazard:
+       * outside the 8 NM alarm radius,
+       * inside the 20 NM warning radius.
+       */
+      longitude:-8.75,
+      latitude:37.025
+    },
+    sog:0,
+    cog:0
+  }
+
+  const app={
+    getDataDirPath:()=>path.join(
+      os.tmpdir(),
+      'radar-v3-vessel-threat'
+    ),
+
+    setPluginStatus(){},
+    debug(){},
+    error(){},
+
+    handleMessage(_id,message){
+      notifications.push(message)
+    },
+
+    getSelfPath(name){
+      if(name==='navigation.position.value'){
+        return ownship.position
+      }
+
+      if(name==='navigation.speedOverGround.value'){
+        return ownship.sog
+      }
+
+      if(name==='navigation.courseOverGroundTrue.value'){
+        return ownship.cog
+      }
+
+      return null
+    },
+
+    registerResourceProvider(){}
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSource:'ipma:PCR',
+    acquisitionTargets:['ipma:PCR'],
+    warnDistanceNm:20,
+    alarmDistanceNm:8,
+    warnSeverity:1,
+    /*
+     * Keep severity escalation out of this test.
+     * Storm severity is bounded at level 5.
+     */
+    alarmSeverity:6
+  })
+
+  try{
+    const observedAt=
+      '2026-10-02T10:00:00.000Z'
+
+    const candidates=[
+      {
+        type:'Feature',
+        id:'candidate-vessel-threat',
+
+        geometry:{
+          type:'Polygon',
+          coordinates:[[
+            [-8.50,37.00],
+            [-8.45,37.00],
+            [-8.45,37.05],
+            [-8.50,37.05],
+            [-8.50,37.00]
+          ]]
+        },
+
+        properties:{
+          observedAt,
+
+          detection:{
+            method:'reflectivity-threshold-v1',
+            areaKm2:60,
+            maxReflectivityDbz:48
+          },
+
+          evidence:{
+            reflectivity:{
+              available:true,
+              units:'dBZ',
+              maxDbz:48,
+              representation:'lower-bound'
+            }
+          }
+        }
+      }
+    ]
+
+    await plugin._test.processStormV3({
+      target:'ipma:PCR',
+
+      latest:{
+        epochMs:Date.parse(observedAt),
+        time:observedAt
+      },
+
+      candidates,
+
+      motionFrame:null,
+      field:null
+    })
+
+    const published=
+      plugin._test.cells()
+
+    assert.equal(
+      published.length,
+      1
+    )
+
+    assert.ok(
+      Number.isFinite(
+        published[0].distanceMeters
+      )
+    )
+
+    assert.equal(
+      published[0].threat?.method,
+      'vessel-relative-kinematic-v1'
+    )
+
+    assert.equal(
+      published[0].threat?.predictive,
+      false
+    )
+
+    assert.equal(
+      published[0].cpa,
+      null
+    )
+
+    assert.equal(
+      published[0].state,
+      'warn'
+    )
+
+    assert.ok(
+      notifications.some(
+        message=>
+          message?.updates?.some(
+            update=>
+              update?.values?.some(
+                value=>
+                  value?.value?.state==='warn'
+              )
+          )
+      )
+    )
+  } finally {
+    plugin.stop()
+  }
+})
+
+
+
+
+test('V3 vessel threat can be refreshed without processing another radar frame',async()=>{
+  let ownship=null
+
+  const app={
+    getDataDirPath:()=>path.join(
+      os.tmpdir(),
+      'radar-v3-threat-refresh'
+    ),
+
+    setPluginStatus(){},
+    debug(){},
+    error(){},
+    handleMessage(){},
+
+    getSelfPath(name){
+      if(!ownship){
+        return null
+      }
+
+      if(name==='navigation.position.value'){
+        return ownship.position
+      }
+
+      if(name==='navigation.speedOverGround.value'){
+        return ownship.sog
+      }
+
+      if(name==='navigation.courseOverGroundTrue.value'){
+        return ownship.cog
+      }
+
+      return null
+    },
+
+    registerResourceProvider(){}
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSource:'ipma:PCR',
+    acquisitionTargets:['ipma:PCR'],
+    warnDistanceNm:20,
+    alarmDistanceNm:8,
+    warnSeverity:1,
+    alarmSeverity:6
+  })
+
+  try{
+    const observedAt=
+      '2026-10-02T10:00:00.000Z'
+
+    await plugin._test.processStormV3({
+      target:'ipma:PCR',
+
+      latest:{
+        epochMs:Date.parse(observedAt),
+        time:observedAt
+      },
+
+      candidates:[{
+        type:'Feature',
+        id:'candidate-refresh',
+
+        geometry:{
+          type:'Polygon',
+          coordinates:[[
+            [-8.50,37.00],
+            [-8.45,37.00],
+            [-8.45,37.05],
+            [-8.50,37.05],
+            [-8.50,37.00]
+          ]]
+        },
+
+        properties:{
+          observedAt,
+
+          detection:{
+            method:'reflectivity-threshold-v1',
+            areaKm2:60,
+            maxReflectivityDbz:48
+          },
+
+          evidence:{
+            reflectivity:{
+              available:true,
+              units:'dBZ',
+              maxDbz:48,
+              representation:'lower-bound'
+            }
+          }
+        }
+      }],
+
+      motionFrame:null,
+      field:null
+    })
+
+    assert.equal(
+      plugin._test.cells()[0].distanceMeters,
+      null
+    )
+
+    assert.equal(
+      plugin._test.cells()[0].threat.reason,
+      'vessel-position-unavailable'
+    )
+
+    ownship={
+      position:{
+        longitude:-8.75,
+        latitude:37.025
+      },
+      sog:0,
+      cog:0
+    }
+
+    plugin._test.refreshStormThreat()
+
+    const refreshed=
+      plugin._test.cells()[0]
+
+    assert.ok(
+      Number.isFinite(
+        refreshed.distanceMeters
+      )
+    )
+
+    assert.equal(
+      refreshed.threat.reason,
+      'storm-motion-unavailable'
+    )
+
+    assert.equal(
+      refreshed.state,
+      'warn'
+    )
+  } finally {
+    plugin.stop()
+  }
+})
+
+
+
 test('storm engine tracks an approaching polygon and predicts CPA',()=>{const e=new StormEngine({warnDistanceM:50000,alarmDistanceM:10000,horizonMinutes:60,warnSeverity:2,alarmSeverity:4,matchDistanceM:100000});const poly=lon=>({type:'Feature',properties:{severity:3},geometry:{type:'Polygon',coordinates:[[[lon,40],[lon+.01,40],[lon+.01,40.01],[lon,40.01],[lon,40]]]}});const v={position:{longitude:12,latitude:40.005},sog:0,cog:0};e.evaluate({epochMs:0,features:[poly(12.5)]},v);const r=e.evaluate({epochMs:300000,features:[poly(12.45)]},v)[0];assert.ok(r.motion.speed>0);assert.ok(r.cpa.closing);assert.ok(r.cpa.dcpaMeters<r.distanceMeters);assert.notEqual(r.state,'normal')})
 test('distant severe cell does not alarm',()=>{const e=new StormEngine({warnDistanceM:20000,alarmDistanceM:8000,horizonMinutes:60,warnSeverity:2,alarmSeverity:4,matchDistanceM:100000});const f={type:'Feature',properties:{severity:5},geometry:{type:'Polygon',coordinates:[[[14,42],[14.01,42],[14.01,42.01],[14,42.01],[14,42]]]}};const r=e.evaluate({epochMs:0,features:[f]},{position:{longitude:12,latitude:40},sog:0,cog:0})[0];assert.equal(r.state,'normal')})
 test('recycling storage enforces byte budget oldest-first',async()=>{const dir=await fs.mkdtemp(path.join(os.tmpdir(),'radar-store-'));const s=new RecyclingStorage(dir,{enabled:true,maxBytes:8,maxAgeMs:0});await s.init();await s.put('HRD',1,Buffer.alloc(6),'.zip');await new Promise(r=>setTimeout(r,10));await s.put('HRD',2,Buffer.alloc(6),'.zip');const st=await s.stats();assert.equal(st.files,1);assert.ok(st.bytes<=8);await fs.rm(dir,{recursive:true,force:true})})
@@ -424,6 +789,139 @@ test('Freeboard storm UI uses host chart layer and map viewport APIs only',async
   assert.match(html,/data-locate/)
   assert.doesNotMatch(html,/ol\.layer|OpenLayers|freeboard.*document/i)
 })
+
+
+test('operational approaching-cell relevance uses configured warning distance and projected polygon approach',()=>{
+  const app={
+    getDataDirPath:()=>path.join(
+      os.tmpdir(),
+      'operational-relevance-test'
+    ),
+    setPluginStatus(){},
+    debug(){},
+    error(){},
+    handleMessage(){},
+    getSelfPath(){return null}
+  }
+
+  const plugin=
+    makePlugin(app)
+
+  const {
+    isOperationalApproachingCell
+  }=plugin._test
+
+  const cfg={
+    warnDistanceNm:20,
+    horizonMinutes:60
+  }
+
+  assert.equal(
+    isOperationalApproachingCell(
+      {
+        distanceMeters:15*1852,
+        threat:{
+          predictive:false
+        }
+      },
+      cfg
+    ),
+    true
+  )
+
+  assert.equal(
+    isOperationalApproachingCell(
+      {
+        distanceMeters:30*1852,
+        threat:{
+          predictive:true
+        },
+        pathThreat:{
+          minDistanceMeters:10*1852,
+          minDistanceSec:1800
+        }
+      },
+      cfg
+    ),
+    true
+  )
+
+  assert.equal(
+    isOperationalApproachingCell(
+      {
+        distanceMeters:30*1852,
+        threat:{
+          predictive:true
+        },
+        pathThreat:{
+          minDistanceMeters:10*1852,
+          minDistanceSec:7200
+        }
+      },
+      cfg
+    ),
+    false
+  )
+
+  assert.equal(
+    isOperationalApproachingCell(
+      {
+        distanceMeters:300*1852,
+        severity:{
+          level:5
+        },
+        cpa:{
+          closing:true
+        },
+        threat:{
+          predictive:true
+        },
+        pathThreat:{
+          minDistanceMeters:250*1852,
+          minDistanceSec:1800
+        }
+      },
+      cfg
+    ),
+    false
+  )
+})
+
+
+test('Freeboard approaching-cell panel filters operational relevance and does not fabricate motion display',async()=>{
+  const html=
+    await fs.readFile(
+      path.join(
+        __dirname,
+        '..',
+        'public',
+        'radar-panel.html'
+      ),
+      'utf8'
+    )
+
+  assert.match(
+    html,
+    /operationallyRelevantCell/
+  )
+
+  assert.match(
+    html,
+    /motion unavailable/
+  )
+
+  assert.doesNotMatch(
+    html,
+    /c\.motion\?\.speed\|\|0/
+  )
+
+  assert.doesNotMatch(
+    html,
+    /c\.cpa\?\.tcpaSec\|\|0/
+  )
+})
+
+
 
 test('multi-frame storm tracking increases confidence and resists a single noisy displacement',()=>{
   const {StormEngine}=require('../lib/storm-engine')
@@ -920,3 +1418,804 @@ test('plugin start honors Signal K persisted configuration wrapper',()=>{
 
   plugin.stop()
 })
+
+test('AEMET normalized radar evidence enters Storm Runtime v3 through generic routing',async()=>{
+  const app={
+    getDataDirPath:()=>path.join(
+      os.tmpdir(),
+      'radar-aemet-runtime-v3'
+    ),
+    setPluginStatus(){},
+    debug(){},
+    error(){},
+    handleMessage(){},
+    getSelfPath(){return null},
+    registerResourceProvider(){}
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSource:'aemet:COMPO',
+    acquisitionTargets:['aemet:COMPO']
+  })
+
+  try {
+    assert.equal(
+      typeof plugin._test.processNormalizedRadarStormV3,
+      'function'
+    )
+
+    const observedAt=
+      '2026-10-01T06:00:00.000Z'
+
+    const width=16
+    const height=16
+    const size=width*height
+
+    const values=
+      new Float32Array(size)
+
+    values.fill(NaN)
+
+    const motionBackgroundMask=
+      new Uint8Array(size)
+
+    /*
+     * A finite quiet background is enough to establish a valid
+     * provider-neutral motion frame. This test is about routing,
+     * not optical-flow recovery.
+     */
+    motionBackgroundMask.fill(1)
+
+    const evidence={
+      schema:'storm-normalized-evidence/1',
+      domain:'radar',
+      quantity:'reflectivity',
+      units:'dBZ',
+      observedAt,
+      width,
+      height,
+      bounds:[
+        -10.0,
+        36.0,
+        -5.0,
+        44.0
+      ],
+      values,
+      motionBackgroundMask,
+      valueSemantics:{
+        representation:'lower-bound',
+        derivation:'native',
+        sourceQuantity:'reflectivity',
+        sourceUnits:'dBZ',
+        intervalSemantics:{
+          kind:'class-interval',
+          boundUsed:'lower'
+        },
+        conversion:null
+      },
+      availability:{
+        available:true,
+        physicalPixels:1,
+        unknownPixels:0,
+        totalPixels:size
+      },
+      provenance:{
+        provider:'aemet',
+        product:'COMPO',
+        method:'test'
+      }
+    }
+
+    const candidates=[
+      {
+        type:'Feature',
+        id:'aemet-candidate-1',
+        geometry:{
+          type:'Polygon',
+          coordinates:[[
+            [-8.50,39.00],
+            [-8.35,39.00],
+            [-8.35,39.15],
+            [-8.50,39.15],
+            [-8.50,39.00]
+          ]]
+        },
+        properties:{
+          observedAt,
+          detection:{
+            method:'reflectivity-threshold-v1',
+            areaKm2:40,
+            maxReflectivityDbz:42
+          },
+          evidence:{
+            reflectivity:{
+              available:true,
+              units:'dBZ',
+              maxDbz:42,
+              representation:'lower-bound'
+            }
+          }
+        }
+      }
+    ]
+
+    const result=
+      await plugin._test.processNormalizedRadarStormV3({
+        target:'aemet:COMPO',
+        latest:{
+          epochMs:Date.parse(observedAt),
+          time:observedAt
+        },
+        processed:{
+          evidence,
+          candidates
+        }
+      })
+
+    assert.equal(result.regions.length,1)
+    assert.equal(result.hazards.length,1)
+
+    assert.equal(
+      plugin._test.cells()[0].provider,
+      'aemet'
+    )
+
+    assert.equal(
+      plugin._test.cells()[0].product,
+      'COMPO'
+    )
+
+    assert.equal(
+      plugin._test.cells()[0].trackId,
+      'track-1'
+    )
+  } finally {
+    plugin.stop()
+  }
+})
+
+test('NOA RAIN_RATE cannot enter the legacy storm processing path',async()=>{
+  const app={
+    getDataDirPath:()=>path.join(
+      os.tmpdir(),
+      'radar-noa-rain-rate-v3-only'
+    ),
+    setPluginStatus(){},
+    debug(){},
+    error(){},
+    handleMessage(){},
+    getSelfPath(){return null},
+    registerResourceProvider(){}
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSource:'noa:RAIN_RATE',
+    acquisitionTargets:['noa:RAIN_RATE']
+  })
+
+  try {
+    await assert.rejects(
+      plugin._test.processStorm(
+        'noa:RAIN_RATE',
+        {
+          epochMs:Date.parse(
+            '2026-10-01T06:00:00.000Z'
+          ),
+          time:'2026-10-01T06:00:00.000Z'
+        },
+        Buffer.alloc(0),
+        []
+      ),
+      /noa:RAIN_RATE must use Storm Runtime v3/
+    )
+  } finally {
+    plugin.stop()
+  }
+})
+
+test('NOA normalized radar evidence enters Storm Runtime v3 through generic routing',async()=>{
+  const app={
+    getDataDirPath:()=>path.join(
+      os.tmpdir(),
+      'radar-noa-v3-routing'
+    ),
+    setPluginStatus(){},
+    debug(){},
+    error(){},
+    handleMessage(){},
+    getSelfPath(){return null},
+    registerResourceProvider(){}
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSource:'noa:RAIN_RATE',
+    acquisitionTargets:['noa:RAIN_RATE']
+  })
+
+  try {
+    const observedAt='2026-10-01T06:00:00.000Z'
+    const width=16
+    const height=16
+    const size=width*height
+
+    const values=new Float32Array(size)
+    values.fill(NaN)
+
+    const motionBackgroundMask=new Uint8Array(size)
+    motionBackgroundMask.fill(1)
+
+    const evidence={
+      schema:'storm-normalized-evidence/1',
+      domain:'radar',
+      quantity:'reflectivity',
+      units:'dBZ',
+      observedAt,
+      width,
+      height,
+      bounds:[22.4706,36.9888,25.2987,39.0912],
+      values,
+      motionBackgroundMask,
+      valueSemantics:{
+        representation:'estimate',
+        derivation:'converted',
+        sourceQuantity:'rainfallRate',
+        sourceUnits:'mm/h',
+        intervalSemantics:null,
+        conversion:{
+          method:'marshall-palmer-z-r',
+          relation:'Z=200*R^1.6'
+        }
+      },
+      availability:{
+        available:true,
+        physicalPixels:1,
+        unavailablePixels:0,
+        totalPixels:size
+      },
+      provenance:{
+        provider:'noa',
+        product:'RAIN_RATE',
+        method:'test'
+      }
+    }
+
+    const candidates=[{
+      type:'Feature',
+      id:'noa-candidate-1',
+      geometry:{
+        type:'Polygon',
+        coordinates:[[
+          [23.50,37.80],
+          [23.70,37.80],
+          [23.70,38.00],
+          [23.50,38.00],
+          [23.50,37.80]
+        ]]
+      },
+      properties:{
+        observedAt,
+        detection:{
+          method:'reflectivity-threshold-v1',
+          areaKm2:40,
+          maxReflectivityDbz:42
+        },
+        evidence:{
+          reflectivity:{
+            available:true,
+            units:'dBZ',
+            maxDbz:42,
+            representation:'estimate'
+          }
+        }
+      }
+    }]
+
+    const result=
+      await plugin._test.processNormalizedRadarStormV3({
+        target:'noa:RAIN_RATE',
+        latest:{
+          epochMs:Date.parse(observedAt),
+          time:observedAt
+        },
+        processed:{
+          evidence,
+          candidates
+        }
+      })
+
+    assert.equal(result.regions.length,1)
+    assert.equal(result.hazards.length,1)
+
+    assert.equal(plugin._test.cells()[0].provider,'noa')
+    assert.equal(plugin._test.cells()[0].product,'RAIN_RATE')
+    assert.equal(plugin._test.cells()[0].trackId,'track-1')
+  } finally {
+    plugin.stop()
+  }
+})
+
+test(
+  'successful zero-strike lightning query reports available coverage',
+  async()=>{
+    const ps=[]
+
+    const app={
+      registerResourceProvider:p=>ps.push(p),
+
+      getDataDirPath:()=>path.join(
+        os.tmpdir(),
+        'storm-lightning-zero-coverage'
+      ),
+
+      setPluginStatus(){},
+      debug(){},
+      error(){},
+      handleMessage(){},
+
+      getSelfPath(pathName){
+        if(
+          pathName==='navigation.position.value' ||
+          pathName==='navigation.position'
+        ){
+          return {
+            latitude:40,
+            longitude:12
+          }
+        }
+
+        return null
+      }
+    }
+
+    const oldFetch=
+      global.fetch
+
+    global.fetch=
+      async()=>({
+        ok:true,
+        status:200,
+        json:async()=>[]
+      })
+
+    const plugin=
+      makePlugin(app)
+
+    plugin.start({
+      backgroundEnabled:false,
+      lightningEnabled:true,
+
+      lightningProviders:[
+        'http-json-lightning'
+      ],
+
+      lightningProviderSettings:{
+        'http-json-lightning':{
+          endpoint:
+            'https://example.invalid/lightning'
+        }
+      }
+    })
+
+    try {
+      await plugin._test.lightningCycle()
+
+      const resources=
+        await ps
+          .find(
+            x=>
+              x.type==='stormIntelligence'
+          )
+          .methods
+          .listResources()
+
+      assert.equal(
+        resources
+          .status
+          .lightning
+          .coverage
+          .available,
+        true
+      )
+
+      assert.equal(
+        resources
+          .status
+          .lightning
+          .coverage
+          .providersSucceeded,
+        1
+      )
+
+      assert.equal(
+        resources
+          .status
+          .lightning
+          .summary
+          .count30min,
+        0
+      )
+    } finally {
+      plugin.stop()
+      global.fetch=oldFetch
+    }
+  }
+)
+
+test(
+  'failed lightning query reports unavailable coverage',
+  async()=>{
+    const ps=[]
+
+    const app={
+      registerResourceProvider:p=>ps.push(p),
+
+      getDataDirPath:()=>path.join(
+        os.tmpdir(),
+        'storm-lightning-failed-coverage'
+      ),
+
+      setPluginStatus(){},
+      debug(){},
+      error(){},
+      handleMessage(){},
+
+      getSelfPath(pathName){
+        if(
+          pathName==='navigation.position.value' ||
+          pathName==='navigation.position'
+        ){
+          return {
+            latitude:40,
+            longitude:12
+          }
+        }
+
+        return null
+      }
+    }
+
+    const oldFetch=
+      global.fetch
+
+    global.fetch=
+      async()=>{
+        throw new Error(
+          'synthetic lightning provider failure'
+        )
+      }
+
+    const plugin=
+      makePlugin(app)
+
+    plugin.start({
+      backgroundEnabled:false,
+      lightningEnabled:true,
+
+      lightningProviders:[
+        'http-json-lightning'
+      ],
+
+      lightningProviderSettings:{
+        'http-json-lightning':{
+          endpoint:
+            'https://example.invalid/lightning'
+        }
+      }
+    })
+
+    try {
+      await plugin._test.lightningCycle()
+
+      const resources=
+        await ps
+          .find(
+            x=>
+              x.type==='stormIntelligence'
+          )
+          .methods
+          .listResources()
+
+      assert.equal(
+        resources
+          .status
+          .lightning
+          .coverage
+          .available,
+        false
+      )
+
+      assert.equal(
+        resources
+          .status
+          .lightning
+          .coverage
+          .providersQueried,
+        1
+      )
+
+      assert.equal(
+        resources
+          .status
+          .lightning
+          .coverage
+          .providersSucceeded,
+        0
+      )
+    } finally {
+      plugin.stop()
+      global.fetch=oldFetch
+    }
+  }
+)
+
+test(
+  'successful lightning coverage is forwarded into Storm Runtime v3 severity',
+  async()=>{
+    const ps=[]
+
+    const app={
+      registerResourceProvider:p=>ps.push(p),
+
+      getDataDirPath:()=>path.join(
+        os.tmpdir(),
+        'storm-lightning-v3-forwarding'
+      ),
+
+      setPluginStatus(){},
+      debug(){},
+      error(){},
+      handleMessage(){},
+
+      getSelfPath(pathName){
+        if(
+          pathName==='navigation.position.value' ||
+          pathName==='navigation.position'
+        ){
+          return {
+            latitude:37.025,
+            longitude:-8.475
+          }
+        }
+
+        return null
+      }
+    }
+
+    const oldFetch=global.fetch
+
+    global.fetch=
+      async()=>({
+        ok:true,
+        status:200,
+        json:async()=>[]
+      })
+
+    const plugin=makePlugin(app)
+
+    plugin.start({
+      backgroundEnabled:false,
+      stormSource:'ipma:PCR',
+      acquisitionTargets:['ipma:PCR'],
+      lightningEnabled:true,
+
+      lightningProviders:[
+        'http-json-lightning'
+      ],
+
+      lightningProviderSettings:{
+        'http-json-lightning':{
+          endpoint:
+            'https://example.invalid/lightning'
+        }
+      }
+    })
+
+    const observedAt=
+      '2026-09-30T10:00:00.000Z'
+
+    const candidates=[
+      {
+        type:'Feature',
+        id:'candidate-lightning-1',
+
+        geometry:{
+          type:'Polygon',
+          coordinates:[[
+            [-8.50,37.00],
+            [-8.45,37.00],
+            [-8.45,37.05],
+            [-8.50,37.05],
+            [-8.50,37.00]
+          ]]
+        },
+
+        properties:{
+          observedAt,
+
+          detection:{
+            method:'reflectivity-threshold-v1',
+            areaKm2:50,
+            maxReflectivityDbz:42
+          },
+
+          evidence:{
+            reflectivity:{
+              available:true,
+              units:'dBZ',
+              maxDbz:42,
+              representation:'measurement'
+            }
+          }
+        }
+      }
+    ]
+
+    try {
+      await plugin._test.lightningCycle()
+
+      const result=
+        await plugin._test.processStormV3({
+          target:'ipma:PCR',
+
+          latest:{
+            epochMs:Date.parse(observedAt),
+            time:observedAt
+          },
+
+          candidates,
+          motionFrame:null,
+
+          field:{
+            width:100,
+            height:100,
+            bounds:[
+              -9,
+              36.5,
+              -8,
+              37.5
+            ]
+          }
+        })
+
+      assert.equal(
+        result.hazards.length,
+        1
+      )
+
+      assert.equal(
+        result.hazards[0]
+          .lightning
+          .available,
+        true
+      )
+
+      assert.equal(
+        result.hazards[0]
+          .lightning
+          .countAssociated,
+        0
+      )
+
+      assert.equal(
+        result.hazards[0]
+          .severity
+          .components
+          .lightning
+          .available,
+        true
+      )
+
+      assert.equal(
+        result.hazards[0]
+          .severity
+          .components
+          .lightning
+          .score,
+        0
+      )
+    } finally {
+      plugin.stop()
+      global.fetch=oldFetch
+    }
+  }
+)
+
+test(
+  'V3 severity object is presented by level without mutating the authoritative object',
+  ()=>{
+    const app={
+      getDataDirPath:()=>path.join(
+        os.tmpdir(),
+        'storm-severity-presentation'
+      ),
+      setPluginStatus(){},
+      debug(){},
+      error(){},
+      handleMessage(){},
+      getSelfPath(){return null}
+    }
+
+    const plugin=makePlugin(app)
+
+    const severity={
+      score:.72,
+      level:4,
+      confidence:.8,
+      method:'storm-severity-v1',
+      components:{
+        radarIntensity:{
+          score:.8,
+          available:true
+        }
+      }
+    }
+
+    const cell={
+      id:'track-1',
+      trackId:'track-1',
+      state:'normal',
+      distanceMeters:18520,
+      cpa:{
+        dcpaMeters:9260,
+        tcpaSec:600
+      },
+      threat:{
+        state:'normal',
+        confidence:.5,
+        intersects:false
+      },
+      severity
+    }
+
+    assert.equal(
+      typeof plugin._test.operationalCell,
+      'function'
+    )
+
+    assert.equal(
+      typeof plugin._test.stormMessage,
+      'function'
+    )
+
+    const presented=
+      plugin._test.operationalCell(cell)
+
+    assert.equal(
+      presented.severity,
+      4
+    )
+
+    assert.equal(
+      presented.risk.score,
+      26
+    )
+
+    assert.strictEqual(
+      cell.severity,
+      severity
+    )
+
+    const message=
+      plugin._test.stormMessage(cell)
+
+    assert.match(
+      message,
+      /severity 4/
+    )
+
+    assert.doesNotMatch(
+      message,
+      /\[object Object\]/
+    )
+  }
+)
+

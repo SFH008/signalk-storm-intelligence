@@ -2,15 +2,109 @@
 
 const test=require('node:test')
 const assert=require('node:assert/strict')
+const zlib=require('node:zlib')
 
 const {
   legendYForRgb,
-  rainRateLowerBoundForLegendY
+  rainRateLowerBoundForLegendY,
+  normalizeIpmaPcr
 }=require('../lib/ipma-pcr-evidence')
 
 const {
   rainRateToDbz
 }=require('../lib/radar-normalization')
+
+
+function crc32(buffer) {
+  let crc=0xffffffff
+
+  for(const byte of buffer) {
+    crc^=byte
+
+    for(let bit=0;bit<8;bit++) {
+      crc=
+        (crc>>>1) ^
+        ((crc&1) ? 0xedb88320 : 0)
+    }
+  }
+
+  return (crc^0xffffffff)>>>0
+}
+
+function pngChunk(type,data) {
+  const name=Buffer.from(type)
+  const length=Buffer.alloc(4)
+  const checksum=Buffer.alloc(4)
+
+  length.writeUInt32BE(data.length)
+
+  checksum.writeUInt32BE(
+    crc32(
+      Buffer.concat([
+        name,
+        data
+      ])
+    )
+  )
+
+  return Buffer.concat([
+    length,
+    name,
+    data,
+    checksum
+  ])
+}
+
+function tinyIndexedIpmaPng() {
+  /*
+   * Three pixels:
+   *
+   *   0 transparent      -> known motion background
+   *   1 opaque black     -> unavailable
+   *   2 official IPMA
+   *     [0,64,253]       -> physical rainfall
+   */
+  const ihdr=Buffer.alloc(13)
+
+  ihdr.writeUInt32BE(3,0)
+  ihdr.writeUInt32BE(1,4)
+  ihdr[8]=8
+  ihdr[9]=3
+
+  const palette=Buffer.from([
+    255,255,255,
+    0,0,0,
+    0,64,253
+  ])
+
+  const transparency=Buffer.from([
+    0,
+    255,
+    255
+  ])
+
+  const raw=Buffer.from([
+    0,
+    0,1,2
+  ])
+
+  return Buffer.concat([
+    Buffer.from([
+      137,80,78,71,13,10,26,10
+    ]),
+    pngChunk('IHDR',ihdr),
+    pngChunk('PLTE',palette),
+    pngChunk('tRNS',transparency),
+    pngChunk(
+      'IDAT',
+      zlib.deflateSync(raw)
+    ),
+    pngChunk(
+      'IEND',
+      Buffer.alloc(0)
+    )
+  ])
+}
 
 test('IPMA official legend maps low and high rainfall colours',()=>{
   assert.equal(
@@ -123,5 +217,63 @@ test('IPMA PCR native Mercator rows are resampled to linear geographic latitude'
 
   assert.ok(
     row>height/2
+  )
+})
+
+
+test('IPMA normalizer emits motion background mask without changing scientific evidence',()=>{
+  const evidence=
+    normalizeIpmaPcr(
+      tinyIndexedIpmaPng(),
+      {
+        bounds:[
+          -10,
+          35,
+          -9,
+          36
+        ],
+        observedAt:
+          '2026-09-20T22:45:00Z'
+      }
+    )
+
+  assert.ok(
+    evidence.motionBackgroundMask instanceof Uint8Array
+  )
+
+  assert.deepEqual(
+    Array.from(
+      evidence.motionBackgroundMask
+    ),
+    [
+      1,
+      0,
+      0
+    ]
+  )
+
+  assert.ok(
+    Number.isNaN(
+      evidence.values[0]
+    )
+  )
+
+  assert.ok(
+    Number.isNaN(
+      evidence.values[1]
+    )
+  )
+
+  assert.ok(
+    Number.isFinite(
+      evidence.values[2]
+    )
+  )
+
+  assert.ok(
+    Math.abs(
+      evidence.values[2] -
+      rainRateToDbz(0.05)
+    ) < 1e-4
   )
 })

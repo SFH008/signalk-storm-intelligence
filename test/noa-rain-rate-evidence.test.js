@@ -108,3 +108,38 @@ test('NOA native RGB PNG normalizes to reflectivity estimate',async()=>{
   assert.equal(field.availability.physicalPixels,2)
   assert.equal(field.availability.unavailablePixels,1)
 })
+
+test('NOA normalizer exposes known zero rainfall as motion background only',async()=>{
+  const png=await sharp(
+    Buffer.from([
+      0,0,0,255,       // class 1: known zero rainfall
+      1,2,3,255,       // unknown RGB
+      255,255,255,0,   // transparent / unavailable
+      0,0,64,255       // class 2: finite rainfall
+    ]),
+    {
+      raw:{
+        width:4,
+        height:1,
+        channels:4
+      }
+    }
+  )
+    .png()
+    .toBuffer()
+
+  const evidence=await normalizeNoaRainRate(png,{
+    bounds:[22.4706,36.9888,25.2987,39.0912],
+    observedAt:'2026-09-23T18:35:45.000Z'
+  })
+
+  assert.deepEqual(
+    Array.from(evidence.motionBackgroundMask),
+    [1,0,0,0]
+  )
+
+  assert.ok(Number.isNaN(evidence.values[0]))
+  assert.ok(Number.isNaN(evidence.values[1]))
+  assert.ok(Number.isNaN(evidence.values[2]))
+  assert.ok(Number.isFinite(evidence.values[3]))
+})

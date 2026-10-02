@@ -44,6 +44,15 @@ function region(
         'operational-hazard-region',
 
       detection:{
+        method:
+          'reflectivity-threshold-development-v1',
+
+        qualification:{
+          quantity:'reflectivity',
+          operator:'>=',
+          thresholdDbz:24
+        },
+
         areaKm2:50,
         maxReflectivityDbz:42
       },
@@ -313,6 +322,15 @@ function movingRegion(
         'operational-hazard-region',
 
       detection:{
+        method:
+          'reflectivity-threshold-development-v1',
+
+        qualification:{
+          quantity:'reflectivity',
+          operator:'>=',
+          thresholdDbz:24
+        },
+
         areaKm2:50,
         maxReflectivityDbz:42
       },
@@ -535,21 +553,46 @@ test(
       })
 
 
-    await engine.processFrame({
-      observedAt:firstTime,
+    const first=
+      await engine.processFrame({
+        observedAt:firstTime,
 
-      regions:[
-        movingRegion(
-          firstId,
-          firstTime,
-          0.20,
-          0.30
-        )
-      ],
+        regions:[
+          movingRegion(
+            firstId,
+            firstTime,
+            0.20,
+            0.30
+          )
+        ],
 
-      now:
-        Date.parse(firstTime)
-    })
+        now:
+          Date.parse(firstTime)
+      })
+
+
+    assert.equal(
+      first.hazards.length,
+      1
+    )
+
+    assert.equal(
+      first.hazards[0]
+        .severity
+        .components
+        .evolution
+        .available,
+      false
+    )
+
+    assert.equal(
+      first.hazards[0]
+        .severity
+        .components
+        .evolution
+        .score,
+      null
+    )
 
 
     const field={
@@ -608,6 +651,48 @@ test(
     assert.equal(
       hazard.trackId,
       'track-1'
+    )
+
+
+    assert.ok(
+      hazard.evolution
+    )
+
+    assert.equal(
+      hazard.evolution.method,
+      'deterministic-evolution-v1'
+    )
+
+    assert.equal(
+      hazard
+        .severity
+        .components
+        .evolution
+        .available,
+      true
+    )
+
+    assert.ok(
+      Number.isFinite(
+        hazard
+          .severity
+          .components
+          .evolution
+          .score
+      )
+    )
+
+    assert.ok(
+      hazard
+        .severity
+        .components
+        .evolution
+        .score>=0 &&
+      hazard
+        .severity
+        .components
+        .evolution
+        .score<=1
     )
 
 
@@ -703,3 +788,232 @@ test(
     )
   }
 )
+
+test('StormEngineV3 attaches storm-severity-v1 contract to every hazard',async()=>{
+  const engine=new StormEngineV3({
+    inferenceEngine:{
+      async inferObservation(){
+        return {
+          schema:'storm-inference/2',
+          stage:'observation',
+          accepted:true,
+          classification:{
+            convectiveCell:{value:null,confidence:null},
+            thunderstorm:{value:null,confidence:null},
+            squallPotential:{value:null,confidence:null}
+          },
+          quality:{
+            score:0.8,
+            confidence:0.9,
+            reasons:[]
+          },
+          contributions:[],
+          provenance:{
+            engine:'test'
+          }
+        }
+      }
+    }
+  })
+
+  const region={
+    id:'region-1',
+    type:'Feature',
+    geometry:{
+      type:'Polygon',
+      coordinates:[[
+        [0,0],
+        [0.1,0],
+        [0.1,0.1],
+        [0,0.1],
+        [0,0]
+      ]]
+    },
+    properties:{
+      observedAt:'2026-10-01T18:50:00.000Z',
+      detection:{
+        method:'reflectivity-threshold-development-v1',
+        qualification:{
+          quantity:'reflectivity',
+          operator:'>=',
+          thresholdDbz:24
+        },
+        areaKm2:100,
+        maxReflectivityDbz:48
+      },
+      evidence:{
+        reflectivity:{
+          available:true,
+          units:'dBZ',
+          maxDbz:48,
+          representation:'lower-bound'
+        }
+      },
+      memberCount:4,
+      provider:'aemet',
+      product:'COMPO'
+    }
+  }
+
+  const result=
+    await engine.processFrame({
+      observedAt:'2026-10-01T18:50:00.000Z',
+      regions:[region]
+    })
+
+  assert.equal(result.hazards.length,1)
+
+  const severity=
+    result.hazards[0].severity
+
+  assert.ok(severity)
+
+  assert.equal(
+    severity.method,
+    'storm-severity-v1'
+  )
+
+  assert.ok(
+    severity.score>=0 &&
+    severity.score<=1
+  )
+
+  assert.ok(
+    severity.level>=1 &&
+    severity.level<=5
+  )
+
+  assert.ok(
+    severity.confidence>=0 &&
+    severity.confidence<=1
+  )
+
+  assert.equal(
+    severity.components.radarIntensity.available,
+    true
+  )
+
+  assert.equal(
+    severity.components.stormSize.available,
+    true
+  )
+
+  assert.equal(
+    severity.components.morphology.available,
+    true
+  )
+
+  assert.equal(
+    severity.components.evolution.available,
+    false
+  )
+
+  assert.equal(
+    severity.components.lightning.available,
+    false
+  )
+
+  assert.equal(
+    severity.components.wind.available,
+    false
+  )
+
+  assert.equal(
+    severity.components.wind.score,
+    null
+  )
+})
+
+test(
+  'StormEngineV3 associates available lightning evidence with severity',
+  async()=>{
+    const observedAt=
+      '2026-09-30T10:00:00.000Z'
+
+    const id=
+      `${observedAt}:hazard-region-lightning`
+
+    const inferenceEngine=
+      new InferenceEngineV2({
+        algorithms:[
+          createDeterministicObservationInference()
+        ]
+      })
+
+    const engine=
+      new StormEngineV3({
+        inferenceEngine
+      })
+
+    const result=
+      await engine.processFrame({
+        observedAt,
+
+        regions:[
+          movingRegion(
+            id,
+            observedAt,
+            0.20,
+            0.30
+          )
+        ],
+
+        lightning:{
+          available:true,
+
+          strikes:[
+            {
+              id:'strike-1',
+              time:
+                '2026-09-30T09:59:00.000Z',
+
+              position:{
+                longitude:0.25,
+                latitude:0.45
+              }
+            }
+          ],
+
+          lookbackMinutes:30,
+          associationRadiusM:15000
+        },
+
+        now:
+          Date.parse(observedAt)
+      })
+
+    assert.equal(
+      result.hazards.length,
+      1
+    )
+
+    const hazard=
+      result.hazards[0]
+
+    assert.equal(
+      hazard.lightning.available,
+      true
+    )
+
+    assert.equal(
+      hazard.lightning.countAssociated,
+      1
+    )
+
+    assert.equal(
+      hazard.severity
+        .components
+        .lightning
+        .available,
+      true
+    )
+
+    assert.ok(
+      hazard.severity
+        .components
+        .lightning
+        .score>0
+    )
+  }
+)
+

@@ -6,7 +6,8 @@ const assert=require('node:assert/strict')
 const {
   centroidGeometry,
   polygonIoU,
-  translateGeometryLocal
+  translateGeometryLocal,
+  distanceToGeometryMeters
 }=require('../lib/storm-geometry')
 
 function square(lon,lat,size=1){
@@ -143,3 +144,44 @@ test('invalid geometry stays safely unsupported',()=>{
     null
   )
 })
+
+test('distanceToGeometryMeters returns zero inside polygon',()=>{
+  const geometry=square(10,20,1)
+
+  assert.equal(
+    distanceToGeometryMeters(
+      [10.5,20.5],
+      geometry
+    ),
+    0
+  )
+})
+
+test('distanceToGeometryMeters returns finite distance outside polygon',()=>{
+  const geometry=square(10,20,1)
+
+  const distance=
+    distanceToGeometryMeters(
+      [12,20.5],
+      geometry
+    )
+
+  assert.ok(
+    Number.isFinite(distance)
+  )
+
+  assert.ok(
+    distance>0
+  )
+})
+
+test('distanceToGeometryMeters safely rejects missing geometry',()=>{
+  assert.equal(
+    distanceToGeometryMeters(
+      [10,20],
+      null
+    ),
+    null
+  )
+})
+

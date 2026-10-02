@@ -12,15 +12,21 @@ const { assertProvider, describeProvider, productCapabilities } = require('./lib
 const { hazardsFromCells, renderHazardTile, renderDevelopmentCandidateTile, renderRadarEchoStructureTile, geometryBounds } = require('./lib/hazard-overlay')
 const { normalizeAemetCompo } = require('./lib/aemet-compo-evidence')
 const {
-  normalizeIpmaPcr,
-  motionFieldFromIpmaPcrEvidence
+  normalizeIpmaPcr
 } = require('./lib/ipma-pcr-evidence')
+
+const {
+  motionFrameFromNormalizedRadarEvidence
+} = require('./lib/storm-tracker-v3/radar-motion-frame')
 const {
   buildHazardRegions
 } = require('./lib/storm-tracker-v3/hazard-regions')
 const {
   StormRuntimeV3
 } = require('./lib/storm-runtime-v3')
+const {
+  assessStormThreat
+} = require('./lib/storm-threat')
 const { normalizeNoaRainRate } = require('./lib/noa-rain-rate-evidence')
 const { detectRadarEchoStructures, detectStormCandidates } = require('./lib/storm-detector')
 const { discoverObservationAdapters, defaultsFromObservationAdapters, observationProviderSettingsSchema, instantiateObservationAdapters } = require('./lib/observation-provider-registry')
@@ -251,7 +257,7 @@ function extensionManifest(pluginId, version) {
 module.exports = function (app) {
   const plugin = { id: 'signalk-storm-intelligence', name: 'Storm Intelligence', version: PACKAGE_VERSION }
   let cfg = { ...DEFAULTS }, providers = new Map(), observationProviders = new Map(), inferenceAlgorithms = new Map(), inferenceEngine, cache = makeCache(DEFAULTS.cacheEntries), charts = {}, storage, tileStore, environmentFusion, weatherApiFusion
-  let timer = null, startupTimer = null, running = false, busy = false, lastAcquired = {}, lastPrefetched = {}, cells = [], radarEchoStructures = [], radarEchoStructuresTime = null, developmentCandidates = [], developmentCandidatesTime = null, lightningStrikes = [], lightningState = 'normal', lightningMessage = '', environmentContext = {available:false}, weatherApiContext = {available:false}, hazardSnapshots = new Map(), hazardSequence = 0, activeHazardSlot = 0, lastAlarm = 'normal', lastAlarmText = '', lastError = null, assetsMounted = false, stormRuntimeV3 = null
+  let timer = null, startupTimer = null, running = false, busy = false, lastAcquired = {}, lastPrefetched = {}, cells = [], radarEchoStructures = [], radarEchoStructuresTime = null, developmentCandidates = [], developmentCandidatesTime = null, lightningStrikes = [], lightningCoverage = {available:false,providersQueried:0,providersSucceeded:0,updatedAt:null}, lightningState = 'normal', lightningMessage = '', environmentContext = {available:false}, weatherApiContext = {available:false}, hazardSnapshots = new Map(), hazardSequence = 0, activeHazardSlot = 0, lastAlarm = 'normal', lastAlarmText = '', lastError = null, assetsMounted = false, stormRuntimeV3 = null
   const activeErrors = new Map()
   const syncLastError = () => { lastError = [...activeErrors.values()].at(-1)?.message || null }
   const err = (message, component = 'runtime') => { activeErrors.set(component, { message, at: new Date().toISOString() }); syncLastError(); app.error?.(message) }
@@ -289,9 +295,23 @@ module.exports = function (app) {
     notifyPath(cfg.notificationPath,state,message,details)
   }
 
+  function severityLevel(cell) {
+    const value =
+      cell?.severity &&
+      typeof cell.severity === 'object'
+        ? cell.severity.level
+        : cell?.severity
+
+    const level=Number(value)
+
+    return Number.isFinite(level)
+      ? Math.max(0,Math.min(5,level))
+      : null
+  }
+
   function stormMessage(cell) {
     if (!cell) return 'No approaching severe-weather cell detected'
-    const d = cell.distanceMeters / NM, dcpa = (cell.cpa?.dcpaMeters ?? cell.distanceMeters) / NM, tcpa = Math.round((cell.cpa?.tcpaSec || 0) / 60), sev = cell.severity == null ? 'unknown' : cell.severity
+    const d = cell.distanceMeters / NM, dcpa = (cell.cpa?.dcpaMeters ?? cell.distanceMeters) / NM, tcpa = Math.round((cell.cpa?.tcpaSec || 0) / 60), sev = severityLevel(cell) ?? 'unknown'
     const intercept = cell.threat?.intersects ? `, projected path intersects in ${Math.round((cell.threat.interceptSec||0)/60)} min` : ''
     const conf = Number.isFinite(cell.threat?.confidence) ? `, confidence ${Math.round(cell.threat.confidence*100)}%` : ''
     return `Weather radar storm cell ${cell.state}: ${d.toFixed(1)} NM away, CPA ${dcpa.toFixed(1)} NM in ${tcpa} min${intercept}, severity ${sev}${conf}`
@@ -425,7 +445,7 @@ module.exports = function (app) {
   function operationalRisk(cell) {
     const state = cell?.threat?.state || cell?.state || 'normal'
     const confidence = Math.max(0, Math.min(1, Number(cell?.threat?.confidence) || 0))
-    const severity = Math.max(0, Math.min(5, Number(cell?.severity) || 0))
+    const severity = severityLevel(cell) ?? 0
     let score = state === 'alarm' ? 65 : state === 'warn' ? 38 : 8
     score += confidence * 16 + severity * 2.5
     if (cell?.threat?.intersects || cell?.pathThreat?.intersects) score += 10
@@ -435,6 +455,65 @@ module.exports = function (app) {
     const label = score >= 85 ? 'critical' : score >= 65 ? 'high' : score >= 40 ? 'moderate' : 'low'
     return { score, label, state, confidence }
   }
+
+  function isOperationalApproachingCell(
+    cell,
+    config=cfg
+  ){
+    const warnDistanceM=
+      Number(config.warnDistanceNm)*NM
+
+    const horizonSec=
+      Number(config.horizonMinutes)*60
+
+    const currentDistance=
+      Number(cell?.distanceMeters)
+
+    /*
+     * A nearby cell is operationally relevant even when storm
+     * motion is not yet available.
+     */
+    if(
+      Number.isFinite(currentDistance) &&
+      Number.isFinite(warnDistanceM) &&
+      currentDistance<=warnDistanceM
+    ){
+      return true
+    }
+
+    /*
+     * Beyond the current warning radius, require an authoritative
+     * predictive threat before considering projected approach.
+     */
+    if(
+      cell?.threat?.predictive!==true
+    ){
+      return false
+    }
+
+    const projectedDistance=
+      Number(
+        cell
+          ?.pathThreat
+          ?.minDistanceMeters
+      )
+
+    const projectedTime=
+      Number(
+        cell
+          ?.pathThreat
+          ?.minDistanceSec
+      )
+
+    return (
+      Number.isFinite(projectedDistance) &&
+      Number.isFinite(projectedTime) &&
+      projectedTime>=0 &&
+      projectedTime<=horizonSec &&
+      projectedDistance<=warnDistanceM
+    )
+  }
+
 
   function operationalCell(cell) {
     const risk = operationalRisk(cell)
@@ -447,7 +526,10 @@ module.exports = function (app) {
     const intersects = path?.intersects === true
     const etaType = intersects && Number.isFinite(interceptSec) ? 'impact' : Number.isFinite(minDistanceSec) ? 'closest-approach' : null
     const etaSec = etaType === 'impact' ? interceptSec : etaType === 'closest-approach' ? minDistanceSec : null
-    const approaching = intersects || closing || (Number.isFinite(minDistanceSec) && minDistanceSec >= 0 && minDistanceSec <= cfg.horizonMinutes * 60)
+    const approaching=
+      isOperationalApproachingCell(
+        cell
+      )
     return {
       id: cell.trackId || cell.id,
       sourceId: cell.sourceId || null,
@@ -456,7 +538,7 @@ module.exports = function (app) {
       observedAt: cell.time || null,
       state: risk.state,
       risk,
-      severity: Number.isFinite(Number(cell.severity)) ? Number(cell.severity) : null,
+      severity: severityLevel(cell),
       confidence: risk.confidence,
       approaching,
       eta: etaType ? { type: etaType, seconds: etaSec, at: new Date(Date.now() + Math.max(0, etaSec) * 1000).toISOString() } : null,
@@ -494,7 +576,15 @@ module.exports = function (app) {
       const run = (inf.lastRuns || []).find(r => r.id === algorithm.id)
       components.push(componentState(`inference:${algorithm.id}`, `Inference · ${algorithm.name || algorithm.id}`, !run ? 'waiting' : run.ok ? 'healthy' : 'error', { algorithm, lastRun: run || null }))
     }
-    const approachingCells = cells.map(operationalCell).filter(c => c.approaching).sort((a, b) => {
+    const approachingCells = cells
+      .filter(
+        cell=>
+          isOperationalApproachingCell(
+            cell
+          )
+      )
+      .map(operationalCell)
+      .sort((a, b) => {
       const stateRank = { alarm: 2, warn: 1, normal: 0 }
       const sr = (stateRank[b.state] || 0) - (stateRank[a.state] || 0)
       if (sr) return sr
@@ -536,7 +626,16 @@ module.exports = function (app) {
       products: cfg.displayLayers, overlays,
       acquisition: { enabled: cfg.backgroundEnabled, targets: cfg.acquisitionTargets, lastAcquired, storage: await storage?.stats() },
       prefetch: { enabled: cfg.prefetchEnabled, targets: cfg.prefetchTargets, radiusNm: cfg.prefetchRadiusNm, zooms: cfg.prefetchZooms, lastPrefetched, storage: await tileStore?.stats() },
-      storm: { enabled: cfg.stormEnabled, source: cfg.stormSource, state: lastAlarm, message: lastAlarmText, cells, overlay: hazardOverlayStatus() },
+      storm: {
+        enabled:cfg.stormEnabled,
+        source:cfg.stormSource,
+        state:lastAlarm,
+        message:lastAlarmText,
+        cells,
+        warnDistanceNm:cfg.warnDistanceNm,
+        horizonMinutes:cfg.horizonMinutes,
+        overlay:hazardOverlayStatus()
+      },
       radarEchoStructures: {
         classification:'development-radar-echo-structure',
         development:true,
@@ -554,7 +653,7 @@ module.exports = function (app) {
         chartId:developmentCandidateChartId()
       },
 
-      lightning: { enabled: cfg.lightningEnabled, providers:[...observationProviders].map(([id,p])=>describeObservationProvider(p)), state:lightningState, message:lightningMessage, summary:lightningSummary(lightningStrikes,vessel().position), observations:lightningStrikes },
+      lightning: { enabled: cfg.lightningEnabled, providers:[...observationProviders].map(([id,p])=>describeObservationProvider(p)), state:lightningState, message:lightningMessage, coverage:lightningCoverage, summary:lightningSummary(lightningStrikes,vessel().position), observations:lightningStrikes },
       onboardEnvironment: environmentContext,
       weatherObservations: weatherApiContext,
       inference: inferenceEngine?.describe() || null,
@@ -734,6 +833,112 @@ module.exports = function (app) {
     }
   }
 
+  function refreshStormThreat() {
+    if(
+      !cfg.stormEnabled ||
+      !Array.isArray(cells) ||
+      cells.length===0
+    ){
+      return cells
+    }
+
+    /*
+     * Refresh only cells which have already passed through the
+     * V3 vessel-relative threat stage. Legacy storm output is
+     * intentionally left untouched.
+     */
+    if(
+      !cells.some(
+        cell=>
+          cell?.threat?.method===
+          'vessel-relative-kinematic-v1'
+      )
+    ){
+      return cells
+    }
+
+    const threatConfig={
+      warnDistanceM:
+        cfg.warnDistanceNm*NM,
+
+      alarmDistanceM:
+        cfg.alarmDistanceNm*NM,
+
+      horizonMinutes:
+        cfg.horizonMinutes,
+
+      warnSeverity:
+        cfg.warnSeverity,
+
+      alarmSeverity:
+        cfg.alarmSeverity,
+
+      pathStepSec:
+        cfg.stormPathStepSec
+    }
+
+    const ownship=
+      vessel()
+
+    cells=
+      cells.map(
+        cell=>
+          assessStormThreat({
+            hazard:cell,
+            vessel:ownship,
+            config:threatConfig
+          })
+      )
+
+    const threatening=
+      cells.find(
+        cell=>cell.state==='alarm'
+      ) ||
+      cells.find(
+        cell=>cell.state==='warn'
+      )
+
+    if(threatening){
+      notify(
+        threatening.state,
+        stormMessage(threatening),
+        {
+          provider:
+            threatening.provider ?? null,
+
+          product:
+            threatening.product ?? null,
+
+          time:
+            threatening.time ?? null,
+
+          cell:threatening
+        }
+      )
+    } else {
+      const reference=
+        cells[0] || {}
+
+      notify(
+        'normal',
+        'No approaching severe-weather cell detected',
+        {
+          provider:
+            reference.provider ?? null,
+
+          product:
+            reference.product ?? null,
+
+          time:
+            reference.time ?? null
+        }
+      )
+    }
+
+    return cells
+  }
+
+
   async function processStormV3({
     target,
     latest,
@@ -788,33 +993,158 @@ module.exports = function (app) {
         regions:regionResult.regions,
         motionFrame,
         field,
+
+        lightning:{
+          available:
+            lightningCoverage.available===true,
+
+          strikes:
+            lightningStrikes,
+
+          lookbackMinutes:
+            cfg.lightningLookbackMinutes,
+
+          associationRadiusM:
+            cfg.lightningAssociationRadiusNm*NM
+        },
+
         now:Date.now()
       })
 
     const t=
       splitTarget(target)
 
+    const threatConfig={
+      warnDistanceM:
+        cfg.warnDistanceNm*NM,
+
+      alarmDistanceM:
+        cfg.alarmDistanceNm*NM,
+
+      horizonMinutes:
+        cfg.horizonMinutes,
+
+      warnSeverity:
+        cfg.warnSeverity,
+
+      alarmSeverity:
+        cfg.alarmSeverity,
+
+      pathStepSec:
+        cfg.stormPathStepSec
+    }
+
+    const ownship=
+      vessel()
+
     cells=
       runtimeResult.hazards.map(
-        hazard=>({
-          ...hazard,
-          provider:t?.providerId ?? null,
-          product:t?.product ?? null,
-          time:observedAt
-        })
+        hazard=>
+          assessStormThreat({
+            hazard:{
+              ...hazard,
+              provider:t?.providerId ?? null,
+              product:t?.product ?? null,
+              time:observedAt
+            },
+            vessel:ownship,
+            config:threatConfig
+          })
       )
 
     publishHazardSnapshot(
       observedAt
     )
 
+    const threatening=
+      cells.find(
+        cell=>cell.state==='alarm'
+      ) ||
+      cells.find(
+        cell=>cell.state==='warn'
+      )
+
+    if(threatening){
+      notify(
+        threatening.state,
+        stormMessage(threatening),
+        {
+          provider:t?.providerId ?? null,
+          product:t?.product ?? null,
+          time:observedAt,
+          cell:threatening
+        }
+      )
+    } else {
+      notify(
+        'normal',
+        'No approaching severe-weather cell detected',
+        {
+          provider:t?.providerId ?? null,
+          product:t?.product ?? null,
+          time:observedAt
+        }
+      )
+    }
+
     return {
       ...runtimeResult,
+      hazards:cells,
       regions:regionResult.regions,
       suppressed:regionResult.suppressed,
       regionDiagnostics:
         regionResult.diagnostics
     }
+  }
+
+
+  async function processNormalizedRadarStormV3({
+    target,
+    latest,
+    processed
+  }={}) {
+    if(
+      !processed ||
+      !processed.evidence ||
+      !Array.isArray(processed.candidates)
+    ){
+      throw new TypeError(
+        'normalized radar storm evidence is required'
+      )
+    }
+
+    const evidence=
+      processed.evidence
+
+    if(
+      evidence.schema!=='storm-normalized-evidence/1' ||
+      evidence.domain!=='radar' ||
+      evidence.quantity!=='reflectivity' ||
+      evidence.units!=='dBZ'
+    ){
+      throw new TypeError(
+        'normalized radar storm evidence is required'
+      )
+    }
+
+    const motionFrame=
+      motionFrameFromNormalizedRadarEvidence(
+        evidence
+      )
+
+    const field={
+      width:evidence.width,
+      height:evidence.height,
+      bounds:evidence.bounds
+    }
+
+    return processStormV3({
+      target,
+      latest,
+      candidates:processed.candidates,
+      motionFrame,
+      field
+    })
   }
 
 
@@ -826,9 +1156,13 @@ module.exports = function (app) {
      * identity and authoritative forecasts belong to Storm Runtime v3.
      * Never allow PCR to fall through to the legacy storm engine.
      */
-    if (target === 'ipma:PCR') {
+    if (
+      target === 'ipma:PCR' ||
+      target === 'aemet:COMPO' ||
+      target === 'noa:RAIN_RATE'
+    ) {
       throw new Error(
-        'IPMA PCR must use Storm Runtime v3'
+        `${target} must use Storm Runtime v3`
       )
     }
 
@@ -894,36 +1228,16 @@ module.exports = function (app) {
 
     if(
       target===cfg.stormSource &&
-      t.providerId==='ipma' &&
-      t.product==='PCR'
+      processed?.evidence?.schema==='storm-normalized-evidence/1' &&
+      processed.evidence.domain==='radar' &&
+      processed.evidence.quantity==='reflectivity' &&
+      processed.evidence.units==='dBZ' &&
+      processed.evidence.motionBackgroundMask instanceof Uint8Array
     ){
-      if(
-        !processed ||
-        !processed.evidence ||
-        !Array.isArray(processed.candidates)
-      ){
-        throw new Error(
-          'IPMA PCR normalized storm evidence unavailable'
-        )
-      }
-
-      const motionFrame=
-        motionFieldFromIpmaPcrEvidence(
-          processed.evidence
-        )
-
-      const field={
-        width:processed.evidence.width,
-        height:processed.evidence.height,
-        bounds:processed.evidence.bounds
-      }
-
-      await processStormV3({
+      await processNormalizedRadarStormV3({
         target,
         latest,
-        candidates:processed.candidates,
-        motionFrame,
-        field
+        processed
       })
     }else{
       await processStorm(
@@ -981,10 +1295,83 @@ module.exports = function (app) {
 
   async function lightningCycle(){
     if(!cfg.lightningEnabled)return
-    const pos=vessel().position;if(!pos){const st='unavailable',msg='Lightning vessel-relative threat unavailable: own-ship position is missing';if(st!==lightningState||msg!==lightningMessage){lightningState=st;lightningMessage=msg;notifyPath(cfg.lightningNotificationPath,st,msg,{reason:'no-position',observationCount:lightningStrikes.length})}return}
+
+    const pos=vessel().position
+
+    if(!pos){
+      lightningCoverage={
+        available:false,
+        providersQueried:0,
+        providersSucceeded:0,
+        updatedAt:new Date().toISOString(),
+        reason:'no-position'
+      }
+
+      const st='unavailable'
+      const msg='Lightning vessel-relative threat unavailable: own-ship position is missing'
+
+      if(st!==lightningState||msg!==lightningMessage){
+        lightningState=st
+        lightningMessage=msg
+        notifyPath(
+          cfg.lightningNotificationPath,
+          st,
+          msg,
+          {
+            reason:'no-position',
+            observationCount:lightningStrikes.length
+          }
+        )
+      }
+
+      return
+    }
+
     const dlat=cfg.lightningQueryRadiusNm*NM/111320,dlon=dlat/Math.max(.1,Math.cos(Number(pos.latitude)*Math.PI/180));const bounds=[Number(pos.longitude)-dlon,Number(pos.latitude)-dlat,Number(pos.longitude)+dlon,Number(pos.latitude)+dlat]
     const now=Date.now(),since=new Date(now-cfg.lightningLookbackMinutes*60000).toISOString(),until=new Date(now).toISOString(),all=[]
-    for(const [id,p] of observationProviders){if(typeof p.observations!=='function')continue;try{const rows=await p.observations({type:'lightning',bounds,since,until,vessel:vessel()});for(const r of rows||[])all.push({...r,provider:r.provider||id});recovered(`lightning:${id}`)}catch(e){err(`Lightning ${id}: ${e.message}`,`lightning:${id}`)}}
+
+    let providersQueried=0
+    let providersSucceeded=0
+
+    for(const [id,p] of observationProviders){
+      if(typeof p.observations!=='function')continue
+
+      providersQueried++
+
+      try{
+        const rows=await p.observations({
+          type:'lightning',
+          bounds,
+          since,
+          until,
+          vessel:vessel()
+        })
+
+        providersSucceeded++
+
+        for(const r of rows||[]){
+          all.push({
+            ...r,
+            provider:r.provider||id
+          })
+        }
+
+        recovered(`lightning:${id}`)
+      }catch(e){
+        err(
+          `Lightning ${id}: ${e.message}`,
+          `lightning:${id}`
+        )
+      }
+    }
+
+    lightningCoverage={
+      available:providersSucceeded>0,
+      providersQueried,
+      providersSucceeded,
+      updatedAt:new Date(now).toISOString()
+    }
+
     const seen=new Set();lightningStrikes=all.filter(r=>{const k=`${r.provider}:${r.id}`;if(seen.has(k))return false;seen.add(k);const t=new Date(r.time).getTime(),age=now-t;return Number.isFinite(t)&&age>=0&&age<=cfg.lightningLookbackMinutes*60000}).sort((a,b)=>new Date(b.time)-new Date(a.time))
     const summary=lightningSummary(lightningStrikes,pos,now),nearest=(summary.nearestStrikeMeters??Infinity)/NM
     let st='normal';if(summary.count30min>=cfg.lightningMinStrikes&&nearest<=cfg.lightningAlarmNm)st='alarm';else if(summary.count30min>=cfg.lightningMinStrikes&&nearest<=cfg.lightningWarningNm)st='warn'
@@ -1002,6 +1389,13 @@ module.exports = function (app) {
       if(cfg.weatherApiObservationsEnabled){const pos=vessel().position;weatherApiContext=pos?await weatherApiFusion.sample(app,pos):{available:false,reason:'no-position',samples:[]}}
       await lightningCycle()
       for (const target of cfg.acquisitionTargets) try { const acquired=await acquireOne(target);results.push({target,acquired});recovered(`acquisition:${target}`) } catch (e) { err(`Acquisition ${target}: ${e.message}`, `acquisition:${target}`);errors.push({component:`acquisition:${target}`,error:e.message}) }
+      /*
+       * Vessel position/SOG/COG changes independently of radar cadence.
+       * Re-evaluate only vessel-relative threat here; do not rerun
+       * StormRuntimeV3 or alter the meteorological storm model.
+       */
+      refreshStormThreat()
+
       const prefetchResults=await prefetchCycle()
       for(const result of prefetchResults)if(result.error||result.failed)errors.push({component:`prefetch:${result.target}`,error:result.error||`${result.failed} tile requests failed`})
       await storage.recycle()
@@ -1177,7 +1571,7 @@ module.exports = function (app) {
     minZoom: { type: 'integer', minimum: 0, maximum: 22, default: 4 }, maxZoom: { type: 'integer', minimum: 0, maximum: 22, default: 13 }, cacheSeconds: { type: 'integer', minimum: 0, maximum: 3600, default: 60 }, cacheEntries: { type: 'integer', minimum: 16, maximum: 10000, default: 512 }, requestTimeoutMs: { type: 'integer', minimum: 1000, maximum: 60000, default: 10000 }
   } })
 
-  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, config: () => cfg, processDevelopmentCandidates, processStorm, processStormV3, cells:()=>cells, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
+  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, config: () => cfg, processDevelopmentCandidates, processStorm, processStormV3, processNormalizedRadarStormV3, severityLevel, operationalRisk, operationalCell, stormMessage, isOperationalApproachingCell, refreshStormThreat, cells:()=>cells, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
   return plugin
 }
 

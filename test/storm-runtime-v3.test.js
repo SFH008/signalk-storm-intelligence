@@ -287,3 +287,83 @@ test(
     )
   }
 )
+
+test(
+  'runtime forwards lightning evidence to StormEngineV3',
+  async()=>{
+    const runtime=
+      new StormRuntimeV3()
+
+    const observedAt=
+      '2026-09-30T10:00:00.000Z'
+
+    const id=
+      `${observedAt}:hazard-region-lightning`
+
+    const result=
+      await runtime.processFrame({
+        observedAt,
+
+        regions:[
+          region(
+            id,
+            observedAt,
+            0.25,
+            0.35
+          )
+        ],
+
+        lightning:{
+          available:true,
+
+          strikes:[
+            {
+              id:'strike-1',
+              time:
+                '2026-09-30T09:59:00.000Z',
+
+              position:{
+                longitude:0.30,
+                latitude:0.65
+              }
+            }
+          ],
+
+          lookbackMinutes:30,
+          associationRadiusM:15000
+        },
+
+        now:
+          Date.parse(observedAt)
+      })
+
+    assert.equal(
+      result.hazards.length,
+      1
+    )
+
+    assert.equal(
+      result.hazards[0]
+        .lightning
+        .available,
+      true
+    )
+
+    assert.equal(
+      result.hazards[0]
+        .lightning
+        .countAssociated,
+      1
+    )
+
+    assert.equal(
+      result.hazards[0]
+        .severity
+        .components
+        .lightning
+        .available,
+      true
+    )
+  }
+)
+

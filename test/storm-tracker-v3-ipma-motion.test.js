@@ -2,97 +2,158 @@
 
 const test=require('node:test')
 const assert=require('node:assert/strict')
+const zlib=require('node:zlib')
 
 const {
-  motionFieldFromIpmaPcrEvidence
+  normalizeIpmaPcr
 }=require('../lib/ipma-pcr-evidence')
 
-test('IPMA PCR evidence maps correctly to motion-field semantics',()=>{
-  const evidence={
-    width:4,
-    height:1,
+const {
+  motionFrameFromNormalizedRadarEvidence
+}=require('../lib/storm-tracker-v3/radar-motion-frame')
 
-    classIndex:Uint8Array.from([
-      0,    // transparent background
-      1,    // opaque black / unavailable
-      11,   // valid weak precipitation
-      33    // valid precipitation
-    ]),
 
-    values:Float32Array.from([
-      NaN,
-      NaN,
-      2.19382,
-      18.19382
-    ]),
+function crc32(buffer) {
+  let crc=0xffffffff
 
-    paletteMappings:[
-      {
-        index:0,
-        available:false,
-        alpha:0
-      },
-      {
-        index:1,
-        available:false,
-        alpha:255,
-        rgb:[0,0,0]
-      },
-      {
-        index:11,
-        available:true
-      },
-      {
-        index:33,
-        available:true
-      }
-    ]
+  for(const byte of buffer) {
+    crc^=byte
+
+    for(let bit=0;bit<8;bit++) {
+      crc=
+        (crc>>>1) ^
+        ((crc&1) ? 0xedb88320 : 0)
+    }
   }
 
+  return (crc^0xffffffff)>>>0
+}
+
+function pngChunk(type,data) {
+  const name=Buffer.from(type)
+  const length=Buffer.alloc(4)
+  const checksum=Buffer.alloc(4)
+
+  length.writeUInt32BE(data.length)
+
+  checksum.writeUInt32BE(
+    crc32(
+      Buffer.concat([
+        name,
+        data
+      ])
+    )
+  )
+
+  return Buffer.concat([
+    length,
+    name,
+    data,
+    checksum
+  ])
+}
+
+function tinyIndexedIpmaPng() {
+  const ihdr=Buffer.alloc(13)
+
+  ihdr.writeUInt32BE(3,0)
+  ihdr.writeUInt32BE(1,4)
+  ihdr[8]=8
+  ihdr[9]=3
+
+  const palette=Buffer.from([
+    255,255,255,
+    0,0,0,
+    0,64,253
+  ])
+
+  const transparency=Buffer.from([
+    0,
+    255,
+    255
+  ])
+
+  const raw=Buffer.from([
+    0,
+    0,1,2
+  ])
+
+  return Buffer.concat([
+    Buffer.from([
+      137,80,78,71,13,10,26,10
+    ]),
+    pngChunk('IHDR',ihdr),
+    pngChunk('PLTE',palette),
+    pngChunk('tRNS',transparency),
+    pngChunk(
+      'IDAT',
+      zlib.deflateSync(raw)
+    ),
+    pngChunk(
+      'IEND',
+      Buffer.alloc(0)
+    )
+  ])
+}
+
+test('IPMA normalized evidence produces the validated generic motion semantics',()=>{
+  const evidence=
+    normalizeIpmaPcr(
+      tinyIndexedIpmaPng(),
+      {
+        bounds:[
+          -10,
+          35,
+          -9,
+          36
+        ],
+        observedAt:
+          '2026-09-20T22:45:00Z'
+      }
+    )
+
   const motion=
-    motionFieldFromIpmaPcrEvidence(
+    motionFrameFromNormalizedRadarEvidence(
       evidence
     )
 
-  assert.equal(motion.width,4)
+  assert.equal(motion.width,3)
   assert.equal(motion.height,1)
 
-  assert.ok(
-    motion.values instanceof Float32Array
-  )
-
-  /*
-   * Transparent PCR background is valid no-echo
-   * for motion estimation.
-   */
   assert.equal(
     motion.values[0],
     0
   )
 
-  /*
-   * Opaque black remains unavailable.
-   */
   assert.ok(
-    Number.isNaN(motion.values[1])
-  )
-
-  /*
-   * Physical precipitation retains normalized
-   * conservative reflectivity.
-   */
-  assert.ok(
-    Math.abs(motion.values[2]-2.19382)<1e-4
+    Number.isNaN(
+      motion.values[1]
+    )
   )
 
   assert.ok(
-    Math.abs(motion.values[3]-18.19382)<1e-4
+    Number.isFinite(
+      motion.values[2]
+    )
+  )
+
+  assert.equal(
+    motion.values[2],
+    evidence.values[2]
   )
 
   /*
-   * Scientific evidence must not be mutated.
+   * Motion adaptation must not mutate normalized scientific evidence.
    */
   assert.ok(
-    Number.isNaN(evidence.values[0])
+    Number.isNaN(
+      evidence.values[0]
+    )
+  )
+
+  assert.ok(
+    Number.isNaN(
+      evidence.values[1]
+    )
   )
 })
