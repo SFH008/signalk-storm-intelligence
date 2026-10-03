@@ -5,7 +5,6 @@ const assert=require('node:assert/strict')
 
 const {
   buildHazardRegions,
-  DEFAULT_CLUSTER_DISTANCE_KM,
   DEFAULT_MIN_REGION_AREA_KM2
 }=require('../lib/storm-tracker-v3/hazard-regions')
 
@@ -42,13 +41,8 @@ function square(
 
 
 test(
-  'uses agreed pragmatic defaults',
+  'uses agreed pragmatic minimum hazard-region area',
   ()=>{
-    assert.equal(
-      DEFAULT_CLUSTER_DISTANCE_KM,
-      25
-    )
-
     assert.equal(
       DEFAULT_MIN_REGION_AREA_KM2,
       25
@@ -58,38 +52,12 @@ test(
 
 
 test(
-  'nearby candidates become one promoted hazard region',
+  'nearby sub-threshold candidates remain separate and suppressed',
   ()=>{
-    /*
-     * Roughly 11 km longitude separation at the equator.
-     */
     const candidates=[
-      square(
-        'a',
-        0,
-        0,
-        0.05,
-        0.05,
-        10
-      ),
-
-      square(
-        'b',
-        0.15,
-        0,
-        0.20,
-        0.05,
-        9
-      ),
-
-      square(
-        'c',
-        0.30,
-        0,
-        0.35,
-        0.05,
-        8
-      )
+      square('a',0,0,0.05,0.05,10),
+      square('b',0.15,0,0.20,0.05,9),
+      square('c',0.30,0,0.35,0.05,8)
     ]
 
     const result=
@@ -99,114 +67,37 @@ test(
 
     assert.equal(
       result.regions.length,
-      1
-    )
-
-    const region=
-      result.regions[0]
-
-    assert.equal(
-      region.properties.memberCount,
-      3
-    )
-
-    assert.equal(
-      region.properties.combinedAreaKm2,
-      27
-    )
-
-    assert.deepEqual(
-      region.properties.memberIds,
-      ['a','b','c']
-    )
-  }
-)
-
-
-test(
-  'cluster envelope is one coherent Polygon',
-  ()=>{
-    const candidates=[
-      square(
-        'a',
-        0,
-        0,
-        0.05,
-        0.05,
-        15
-      ),
-
-      square(
-        'b',
-        0.15,
-        0,
-        0.20,
-        0.05,
-        15
-      )
-    ]
-
-    const result=
-      buildHazardRegions(
-        candidates
-      )
-
-    assert.equal(
-      result.regions.length,
-      1
-    )
-
-    assert.equal(
-      result.regions[0].geometry.type,
-      'Polygon'
-    )
-
-    /*
-     * Operational envelope must span the gap
-     * between the disconnected radar cores.
-     */
-    const ring=
-      result.regions[0]
-        .geometry
-        .coordinates[0]
-
-    const xs=
-      ring.map(p=>p[0])
-
-    assert.equal(
-      Math.min(...xs),
       0
     )
 
     assert.equal(
-      Math.max(...xs),
-      0.20
+      result.suppressed.length,
+      3
+    )
+
+    assert.deepEqual(
+      result.suppressed.map(
+        region=>region.properties.memberCount
+      ),
+      [1,1,1]
+    )
+
+    assert.deepEqual(
+      result.suppressed.map(
+        region=>region.properties.combinedAreaKm2
+      ),
+      [10,9,8]
     )
   }
 )
 
 
 test(
-  'actual member geometries are preserved separately',
+  'disconnected candidate geometries are never bridged by a synthetic envelope',
   ()=>{
     const candidates=[
-      square(
-        'a',
-        0,
-        0,
-        0.05,
-        0.05,
-        15
-      ),
-
-      square(
-        'b',
-        0.15,
-        0,
-        0.20,
-        0.05,
-        15
-      )
+      square('a',0,0,0.05,0.05,30),
+      square('b',0.15,0,0.20,0.05,30)
     ]
 
     const result=
@@ -214,21 +105,58 @@ test(
         candidates
       )
 
-    const region=
-      result.regions[0]
+    assert.equal(
+      result.regions.length,
+      2
+    )
+
+    assert.deepEqual(
+      result.regions.map(
+        region=>region.geometry
+      ),
+      candidates.map(
+        candidate=>candidate.geometry
+      )
+    )
+  }
+)
+
+
+test(
+  'each promoted hazard region preserves exactly one source candidate',
+  ()=>{
+    const candidates=[
+      square('a',0,0,0.05,0.05,30),
+      square('b',0.15,0,0.20,0.05,30)
+    ]
+
+    const result=
+      buildHazardRegions(
+        candidates
+      )
 
     assert.equal(
-      region.members.length,
+      result.regions.length,
       2
     )
 
     assert.equal(
-      region.members[0],
+      result.regions[0].members.length,
+      1
+    )
+
+    assert.equal(
+      result.regions[1].members.length,
+      1
+    )
+
+    assert.equal(
+      result.regions[0].members[0],
       candidates[0]
     )
 
     assert.equal(
-      region.members[1],
+      result.regions[1].members[0],
       candidates[1]
     )
   }
@@ -353,12 +281,8 @@ test(
 
 
 test(
-  'proximity clustering is transitive',
+  'nearby sub-threshold candidates are not transitively combined',
   ()=>{
-    /*
-     * A-B and B-C are each inside the clustering
-     * radius. A-C does not need to be.
-     */
     const candidates=[
       square(
         'a',
@@ -390,22 +314,25 @@ test(
 
     const result=
       buildHazardRegions(
-        candidates,
-        {
-          clusterDistanceKm:25
-        }
+        candidates
       )
 
     assert.equal(
       result.regions.length,
-      1
+      0
     )
 
     assert.equal(
-      result.regions[0]
-        .properties
-        .memberCount,
+      result.suppressed.length,
       3
+    )
+
+    assert.deepEqual(
+      result.suppressed.map(
+        region=>
+          region.properties.memberCount
+      ),
+      [1,1,1]
     )
   }
 )
@@ -456,7 +383,7 @@ test(
 
 
 test(
-  'hazard region preserves strongest reflectivity evidence and aggregate area',
+  'hazard-region stage preserves candidate area and evidence without aggregation',
   ()=>{
     const observedAt=
       '2026-09-30T10:00:00.000Z'
@@ -505,30 +432,36 @@ test(
 
     assert.equal(
       result.regions.length,
-      1
-    )
-
-    const region=
-      result.regions[0]
-
-    assert.equal(
-      region.properties.detection.areaKm2,
-      31
+      0
     )
 
     assert.equal(
-      region.properties.detection.maxReflectivityDbz,
-      47
+      result.suppressed.length,
+      2
     )
 
-    assert.equal(
-      region.properties.evidence.reflectivity.maxDbz,
-      47
+    assert.deepEqual(
+      result.suppressed.map(
+        region=>
+          region.properties.detection.areaKm2
+      ),
+      [15,16]
     )
 
-    assert.equal(
-      region.properties.evidence.reflectivity.units,
-      'dBZ'
+    assert.deepEqual(
+      result.suppressed.map(
+        region=>
+          region.properties.evidence.reflectivity.maxDbz
+      ),
+      [38,47]
+    )
+
+    assert.deepEqual(
+      result.suppressed.map(
+        region=>
+          region.properties.memberCount
+      ),
+      [1,1]
     )
   }
 )
