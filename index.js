@@ -254,6 +254,31 @@ function extensionManifest(pluginId, version) {
   }
 }
 
+function authoritativeV3InferenceComponents(runtime, enabled=true) {
+  const engine=runtime?.inferenceEngine
+  const processedAt=
+    runtime?.stormEngine?.previousObservedAt ??
+    null
+
+  return (engine?.algorithms || []).map(algorithm=>({
+    id:`inference:${algorithm.id}`,
+    name:`Inference · ${algorithm.id}`,
+    state:
+      !enabled
+        ? 'disabled'
+        : processedAt
+          ? 'healthy'
+          : 'waiting',
+    algorithm:{
+      id:algorithm.id,
+      type:algorithm.type ?? 'unknown',
+      version:algorithm.version ?? null
+    },
+    engine:'inference-engine-v2',
+    processedAt
+  }))
+}
+
 module.exports = function (app) {
   const plugin = { id: 'signalk-storm-intelligence', name: 'Storm Intelligence', version: PACKAGE_VERSION }
   let cfg = { ...DEFAULTS }, providers = new Map(), observationProviders = new Map(), inferenceAlgorithms = new Map(), inferenceEngine, cache = makeCache(DEFAULTS.cacheEntries), charts = {}, storage, tileStore, environmentFusion, weatherApiFusion
@@ -571,11 +596,12 @@ module.exports = function (app) {
     components.push(componentState('lightning', 'Lightning observations', !cfg.lightningEnabled ? 'disabled' : observationProviders.size === 0 ? 'warning' : lightningStrikes.length ? 'healthy' : 'waiting', { providers: [...observationProviders.keys()], observationCount: lightningStrikes.length, state: lightningState }))
     components.push(componentState('onboard-environment', 'Onboard environmental sensors', !cfg.onboardEnvironmentEnabled ? 'disabled' : environmentContext?.available ? 'healthy' : 'waiting', { evidence: environmentContext }))
     components.push(componentState('weather-api', 'Signal K Weather API observations', !cfg.weatherApiObservationsEnabled ? 'disabled' : weatherApiContext?.available ? 'healthy' : 'waiting', { sampleCount: weatherApiContext?.samples?.length || 0, evidence: weatherApiContext }))
-    const inf = inferenceEngine?.describe() || { algorithms: [], lastRuns: [] }
-    for (const algorithm of inf.algorithms || []) {
-      const run = (inf.lastRuns || []).find(r => r.id === algorithm.id)
-      components.push(componentState(`inference:${algorithm.id}`, `Inference · ${algorithm.name || algorithm.id}`, !run ? 'waiting' : run.ok ? 'healthy' : 'error', { algorithm, lastRun: run || null }))
-    }
+    components.push(
+      ...authoritativeV3InferenceComponents(
+        stormRuntimeV3,
+        cfg.stormEnabled
+      )
+    )
     const approachingCells = cells
       .filter(
         cell=>
@@ -1571,8 +1597,8 @@ module.exports = function (app) {
     minZoom: { type: 'integer', minimum: 0, maximum: 22, default: 4 }, maxZoom: { type: 'integer', minimum: 0, maximum: 22, default: 13 }, cacheSeconds: { type: 'integer', minimum: 0, maximum: 3600, default: 60 }, cacheEntries: { type: 'integer', minimum: 16, maximum: 10000, default: 512 }, requestTimeoutMs: { type: 'integer', minimum: 1000, maximum: 60000, default: 10000 }
   } })
 
-  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, config: () => cfg, processDevelopmentCandidates, processStorm, processStormV3, processNormalizedRadarStormV3, severityLevel, operationalRisk, operationalCell, stormMessage, isOperationalApproachingCell, refreshStormThreat, cells:()=>cells, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
+  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, authoritativeV3InferenceComponents, config: () => cfg, processDevelopmentCandidates, processStorm, processStormV3, processNormalizedRadarStormV3, severityLevel, operationalRisk, operationalCell, stormMessage, isOperationalApproachingCell, refreshStormThreat, cells:()=>cells, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
   return plugin
 }
 
-module.exports._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds }
+module.exports._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, authoritativeV3InferenceComponents }

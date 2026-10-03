@@ -2219,3 +2219,57 @@ test(
   }
 )
 
+
+test('operational inference status reports authoritative V3 inference engine',()=>{
+  const {
+    authoritativeV3InferenceComponents
+  }=makePlugin._test
+
+  const runtime={
+    inferenceEngine:{
+      algorithms:[
+        {
+          id:'deterministic-observation-v2',
+          type:'deterministic',
+          version:'1'
+        }
+      ]
+    },
+
+    stormEngine:{
+      previousObservedAt:
+        '2026-10-03T16:50:00.000Z'
+    }
+  }
+
+  const components=
+    authoritativeV3InferenceComponents(
+      runtime,
+      true
+    )
+
+  assert.equal(
+    components.length,
+    1
+  )
+
+  assert.equal(
+    components[0].id,
+    'inference:deterministic-observation-v2'
+  )
+
+  assert.equal(
+    components[0].state,
+    'healthy'
+  )
+
+  assert.equal(
+    components[0].engine,
+    'inference-engine-v2'
+  )
+
+  assert.equal(
+    components[0].processedAt,
+    '2026-10-03T16:50:00.000Z'
+  )
+})
