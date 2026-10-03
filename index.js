@@ -336,10 +336,49 @@ module.exports = function (app) {
 
   function stormMessage(cell) {
     if (!cell) return 'No approaching severe-weather cell detected'
-    const d = cell.distanceMeters / NM, dcpa = (cell.cpa?.dcpaMeters ?? cell.distanceMeters) / NM, tcpa = Math.round((cell.cpa?.tcpaSec || 0) / 60), sev = severityLevel(cell) ?? 'unknown'
-    const intercept = cell.threat?.intersects ? `, projected path intersects in ${Math.round((cell.threat.interceptSec||0)/60)} min` : ''
-    const conf = Number.isFinite(cell.threat?.confidence) ? `, confidence ${Math.round(cell.threat.confidence*100)}%` : ''
-    return `Weather radar storm cell ${cell.state}: ${d.toFixed(1)} NM away, CPA ${dcpa.toFixed(1)} NM in ${tcpa} min${intercept}, severity ${sev}${conf}`
+
+    const distanceMeters=Number(cell.distanceMeters)
+    const distance=
+      Number.isFinite(distanceMeters)
+        ? `${(distanceMeters/NM).toFixed(1)} NM away`
+        : 'distance unavailable'
+
+    const predictive=
+      cell?.threat?.predictive===true
+
+    const dcpaMeters=
+      Number(cell?.cpa?.dcpaMeters)
+
+    const tcpaSec=
+      Number(cell?.cpa?.tcpaSec)
+
+    const approach=
+      predictive &&
+      Number.isFinite(dcpaMeters) &&
+      Number.isFinite(tcpaSec)
+        ? `CPA ${(dcpaMeters/NM).toFixed(1)} NM, TCPA ${Math.round(tcpaSec/60)} min`
+        : 'CPA unavailable, motion unavailable'
+
+    const intercept=
+      predictive &&
+      cell?.threat?.intersects===true &&
+      Number.isFinite(Number(cell?.threat?.interceptSec))
+        ? `, projected path intersects in ${Math.round(Number(cell.threat.interceptSec)/60)} min`
+        : ''
+
+    const sev=
+      severityLevel(cell) ??
+      'unknown'
+
+    const severityConfidence=
+      Number(cell?.severity?.confidence)
+
+    const confidence=
+      Number.isFinite(severityConfidence)
+        ? `, severity confidence ${Math.round(severityConfidence*100)}%`
+        : ''
+
+    return `Weather radar storm cell ${cell.state}: ${distance}, ${approach}${intercept}, severity ${sev}${confidence}`
   }
 
   async function fetchLatest(providerId, product) {

@@ -2273,3 +2273,57 @@ test('operational inference status reports authoritative V3 inference engine',()
     '2026-10-03T16:50:00.000Z'
   )
 })
+
+
+test('storm message does not fabricate CPA or TCPA when motion is unavailable',()=>{
+  const {stormMessage}=makePlugin()._test
+
+  const message=stormMessage({
+    state:'warn',
+    distanceMeters:18520,
+    cpa:null,
+    threat:{
+      predictive:false,
+      confidence:0,
+      intersects:false
+    },
+    severity:{
+      level:3,
+      confidence:0.73
+    }
+  })
+
+  assert.match(message,/10\.0 NM away/)
+  assert.match(message,/CPA unavailable/)
+  assert.doesNotMatch(message,/CPA 10\.0 NM/)
+  assert.doesNotMatch(message,/0 min/)
+  assert.match(message,/severity 3/)
+  assert.match(message,/severity confidence 73%/)
+})
+
+test('storm message reports predictive CPA and TCPA when available',()=>{
+  const {stormMessage}=makePlugin()._test
+
+  const message=stormMessage({
+    state:'warn',
+    distanceMeters:18520,
+    cpa:{
+      dcpaMeters:9260,
+      tcpaSec:1800
+    },
+    threat:{
+      predictive:true,
+      confidence:0.8,
+      intersects:false
+    },
+    severity:{
+      level:3,
+      confidence:0.73
+    }
+  })
+
+  assert.match(message,/10\.0 NM away/)
+  assert.match(message,/CPA 5\.0 NM/)
+  assert.match(message,/TCPA 30 min/)
+  assert.match(message,/severity confidence 73%/)
+})
