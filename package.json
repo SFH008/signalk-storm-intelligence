@@ -1,6 +1,6 @@
 {
   "name": "signalk-storm-intelligence",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "description": "Signal K severe-weather decision support with multisensor storm tracking, vessel-relative hazards, radar overlays, offline replay, and a read-only operational WebApp.",
   "main": "index.js",
   "type": "commonjs",
@@ -35,6 +35,7 @@
     "node": ">=20"
   },
   "files": [
+    "AGENTS.md",
     "CHANGELOG.md",
     "LICENSE",
     "README.md",
@@ -72,7 +73,9 @@
     "live-check:llm": "node scripts/live-check-llm.js",
     "audit": "npm audit --omit=dev --audit-level=high",
     "quality": "node scripts/quality-check.js && npm run check && npm run audit",
-    "live-check:dpc-vmi": "node scripts/live-check-dpc-vmi.js"
+    "live-check:dpc-vmi": "node scripts/live-check-dpc-vmi.js",
+    "live-check:rdt": "node scripts/live-check-eumetsat-rdt.js",
+    "replay:rdt": "node scripts/replay-eumetsat-rdt.js"
   },
   "repository": {
     "type": "git",

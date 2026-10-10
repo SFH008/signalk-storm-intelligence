@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added downloadable-package installation instructions covering configuration, upgrades, rollback and removal.
+- Extracted and documented public MTG v2025 native RDT reference products, including version-dependent duration packing, contour padding and forecast timestamp anomalies.
+- Documented the current operational MTG RDT publication, EUMETCast channels, 10-minute forecast steps and publication-specific licensing from authoritative public metadata.
+- Added a research-only EUMETView RDT acquisition check with bounded exact-time requests, immutable local response records and deterministic contract tests. Operational detection and alerts are unchanged.
+- Added checksum-verified offline RDT research resources preserving cloud geometry and uninterpreted native attributes; unresolved temporal, motion and licence semantics explicitly prevent operational use.
+- Added deterministic offline RDT transformation replay with bounded file inputs, source/code checksums and explicit unavailable-frame records.
+
+## 2.4.2 - 2026-10-10
+
+- Removed historical frame entries from chart discovery. Radar playback now retargets one chart through Freeboard's temporal chart API; storm cells use one stable current layer. Legacy frame resources remain directly addressable.
+
 ## 2.4.1 - 2026-10-10
 
 - Corrected the operational dashboard to display V3's last processed observation timestamp instead of incorrectly claiming it is waiting for its first inference cycle. Legacy inference diagnostics and provider availability warnings remain visible.

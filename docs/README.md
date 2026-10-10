@@ -4,6 +4,8 @@ The documentation is organized as a technical and scientific reference for opera
 
 ## Start here
 
+- [`installation.md`](installation.md) — downloadable-package installation, first configuration, upgrades and removal.
+
 1. [`architecture.md`](architecture.md) — system decomposition, evidence flow, trust boundaries and extension invariants.
 2. [`storm-intelligence-model.md`](storm-intelligence-model.md) — normalized evidence, geometry, time, confidence, uncertainty and vessel-relative threat semantics.
 3. [`configuration.md`](configuration.md) — runtime/provider/inference configuration and reproducible configuration capture.
@@ -11,6 +13,11 @@ The documentation is organized as a technical and scientific reference for opera
 5. [`security-privacy-licensing.md`](security-privacy-licensing.md) — credentials, vessel privacy, provider terms, retention and remote inference.
 
 ## Provider integration
+
+- [`eumetsat-rdt-investigation.md`](eumetsat-rdt-investigation.md) — bounded exact-time RDT vector retrieval findings and unresolved integration gates.
+- [`convective-cloud-resource.md`](convective-cloud-resource.md) — provisional checksum-verified offline cloud-object resource with explicit unresolved semantics and operational-use gate.
+- [`rdt-native-field-contract.md`](rdt-native-field-contract.md) — extracted native units, packing, direction, quality codes and forecast/time distinctions from public provider metadata and source.
+- [`rdt-mtg-native-contract.md`](rdt-mtg-native-contract.md) — acquired MTG v2025 reference products, packing changes, contour structure and forecast timestamp anomalies.
 
 - [`dpc-vmi-normalization.md`](dpc-vmi-normalization.md) — DPC native reflectivity normalization, V3 configuration, missing-data semantics and replay provenance.
 
@@ -45,6 +52,8 @@ The documentation is organized as a technical and scientific reference for opera
 - [`weather-radar-api-draft.md`](weather-radar-api-draft.md) — historical working draft retained for traceability; later documents supersede parts of its terminology.
 
 ## Repository engineering
+
+- [`storm-intelligence-handover-2026-10-10.md`](storm-intelligence-handover-2026-10-10.md) — dated production status, completed baseline work and EUMETSAT RDT investigation handover.
 
 Repository-wide engineering, safety, testing, reproducibility and contribution rules are in [`../AGENTS.md`](../AGENTS.md). The normal deterministic release gate is:
 

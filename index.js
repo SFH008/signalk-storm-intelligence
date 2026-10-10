@@ -130,6 +130,9 @@ function chartRecord(pluginId, provider, product, cfg, slot = 0) {
     description: `${m.description}. Source: ${provider.name}.${slot > 0 ? ` Historical playback slot ${slot}.` : ''}`,
     type: 'tilelayer', format: 'png', minzoom: Math.max(cfg.minZoom, Number.isFinite(m.minZoom) ? m.minZoom : cfg.minZoom), maxzoom: Math.min(cfg.maxZoom, Number.isFinite(m.maxZoom) ? m.maxZoom : cfg.maxZoom), bounds,
     url: `/stormintelligence/${pluginId}/tiles/${provider.id}/${product}/{z}/{x}/{y}.png${suffix}`,
+    ...(slot === 0 && cfg.playbackEnabled && m.temporal !== false ? {
+      time: chartTimeDimension(`/stormintelligence/${pluginId}/tiles/${provider.id}/${product}/{z}/{x}/{y}.png?time={time}`, cfg.playbackTimelineMinutes)
+    } : {}),
     attribution: provider.attribution || provider.name,
     provider: provider.id, product, family: provider.family || 'radar',
     stormIntelligence: {
@@ -145,6 +148,19 @@ function chartRecord(pluginId, provider, product, cfg, slot = 0) {
   }]
 }
 
+function chartTimeDimension(url, minutes) {
+  const now = Date.now()
+  const lookback = Math.max(5, Math.min(1440, Number(minutes) || 180))
+  return { current: true, from: new Date(now - lookback * 60000).toISOString(), to: new Date(now).toISOString(), url }
+}
+
+function visibleChartResources(charts) {
+  return Object.fromEntries(Object.entries(charts).filter(([, chart]) => {
+    const metadata = chart.stormIntelligence
+    return !(metadata?.playbackSlot > 0 || metadata?.hazardSlot > 0)
+  }))
+}
+
 function chartRecords(pluginId, provider, product, cfg) {
   const count = cfg.playbackEnabled ? Math.max(1, Math.min(72, Number(cfg.playbackSlots) || 1)) : 1
   return Array.from({ length: count }, (_, slot) => chartRecord(pluginId, provider, product, cfg, slot))
@@ -157,7 +173,8 @@ function hazardChartRecords(pluginId, cfg) {
   const count = Math.max(1, Math.min(72, Number(cfg.hazardOverlaySlots) || 1))
   return Array.from({ length: count }, (_, slot) => {
     const id = hazardChartId(slot)
-    return [id, { identifier:id, name:hazardChartName(slot), description:'Normalized storm cells, motion tracks and predicted cell envelope.', type:'tilelayer', format:'png', minzoom:cfg.minZoom, maxzoom:cfg.maxZoom, bounds:[-180,-85,180,85], url:`/stormintelligence/${pluginId}/hazards/${slot}/{z}/{x}/{y}.png`, attribution:'Storm Intelligence hazard providers', stormIntelligence:{apiVersion:'2.0-draft',kind:'hazards',hazardSlot:slot,capabilities:{cells:true,prediction:true,cpa:true}} }]
+    const routeSlot = slot === 0 ? 'current' : slot
+    return [id, { identifier:id, name:hazardChartName(slot), description:'Normalized storm cells, motion tracks and predicted cell envelope.', type:'tilelayer', format:'png', minzoom:cfg.minZoom, maxzoom:cfg.maxZoom, bounds:[-180,-85,180,85], url:`/stormintelligence/${pluginId}/hazards/${routeSlot}/{z}/{x}/{y}.png`, ...(slot === 0 ? { time: chartTimeDimension(`/stormintelligence/${pluginId}/hazards/current/{z}/{x}/{y}.png?time={time}`, cfg.playbackTimelineMinutes) } : {}), attribution:'Storm Intelligence hazard providers', stormIntelligence:{apiVersion:'2.0-draft',kind:'hazards',hazardSlot:slot,capabilities:{cells:true,prediction:true,cpa:true}} }]
   })
 }
 
@@ -248,7 +265,7 @@ function extensionManifest(pluginId, version) {
     description: 'Multisensor storm intelligence, weather radar mosaics, lightning, environmental evidence, inference and approaching-storm warnings.',
     version, apiVersion: '1',
     requires: ['panels.iframe', 'buttons', 'resources'],
-    optional: ['widgets', 'signalk.stream', 'map', 'ui', 'charts'],
+    optional: ['widgets', 'signalk.stream', 'map', 'ui', 'charts', 'charts.time'],
     panels: [{ id: 'storm-intelligence-panel', title: 'Storm Intelligence', type: 'iframe', url: `${base}/radar-panel.html`, lifecycle: 'keepAlive' }],
     widgets: [{ id: 'storm-status', title: 'Storm Intelligence', type: 'iframe', url: `${base}/storm-widget.html`, size: '2x1', lifecycle: 'whileEnabled' }],
     buttons: [{ id: 'storm-intelligence', title: 'Storm Intelligence', slot: 'mapToolbar', icon: 'radar', action: { type: 'togglePanel', panel: 'storm-intelligence-panel' } }]
@@ -560,12 +577,12 @@ module.exports = function (app) {
   }
 
   function currentHazards() {
-    return { source: activeStormSource, state: lastAlarm, activeSlot: activeHazardSlot, chartId: hazardChartId(activeHazardSlot), chartName: hazardChartName(activeHazardSlot), ...hazardsFromCells(cells, null, { vessel: vessel() }) }
+    return { source: activeStormSource, state: lastAlarm, activeSlot: activeHazardSlot, chartId: hazardChartId(0), chartName: hazardChartName(0), ...hazardsFromCells(cells, null, { vessel: vessel() }) }
   }
 
   function hazardOverlayStatus() {
     const snap = hazardSnapshots.get(activeHazardSlot)
-    return { enabled: cfg.hazardOverlayEnabled, activeSlot: activeHazardSlot, resourceId: hazardChartId(activeHazardSlot), name: hazardChartName(activeHazardSlot), time: snap?.time || cells[0]?.time || null, slots: Math.max(1, Math.min(72, Number(cfg.hazardOverlaySlots) || 1)), opacity: cfg.hazardOverlayOpacity }
+    return { enabled: cfg.hazardOverlayEnabled, activeSlot: activeHazardSlot, resourceId: hazardChartId(0), name: hazardChartName(0), time: snap?.time || cells[0]?.time || null, slots: Math.max(1, Math.min(72, Number(cfg.hazardOverlaySlots) || 1)), opacity: cfg.hazardOverlayOpacity }
   }
 
   function isoDurationMs(value) {
@@ -749,7 +766,7 @@ module.exports = function (app) {
       if (cfg.playbackEnabled && m.temporal !== false) {
         try {
           const pf = await playbackFrames(t.providerId, t.product)
-          playback = { enabled: true, period: pf.period, latest: pf.latest, intervalMs: cfg.playbackIntervalMs, frames: pf.frames.map(f => ({ ...f, resourceId: playbackChartId(t.providerId, t.product, f.slot), name: playbackChartName(m.title, f.slot) })) }
+          playback = { enabled: true, period: pf.period, latest: pf.latest, intervalMs: cfg.playbackIntervalMs, frames: pf.frames.map(f => ({ ...f, resourceId, name: playbackChartName(m.title, 0) })) }
         } catch (e) { playback = { enabled: true, frames: [], error: e.message } }
       }
       return { key, provider: t.providerId, providerName: provider.name, family: provider.family || 'radar', product: t.product, name: m.title, resourceId, latest, playback }
@@ -826,9 +843,11 @@ module.exports = function (app) {
     app.get(`${tileBase}/hazards/:slot/:z/:x/:y.png`, async (req, res) => {
       try {
         if (!cfg.hazardOverlayEnabled) return res.status(404).end()
-        const slot=Number(req.params.slot),z=Number(req.params.z),x=Number(req.params.x),y=Number(req.params.y)
+        const slot=req.params.slot === 'current' ? activeHazardSlot : Number(req.params.slot),z=Number(req.params.z),x=Number(req.params.x),y=Number(req.params.y)
         if (![slot,z,x,y].every(Number.isInteger) || slot < 0 || slot >= cfg.hazardOverlaySlots || z < cfg.minZoom || z > cfg.maxZoom) return res.status(400).end()
-        const snap=hazardSnapshots.get(slot)
+        const requestedTime = req.query.time ? normalizeTime(req.query.time) : null
+        const snap=requestedTime ? [...hazardSnapshots.values()].find(frame => normalizeTime(frame.time) === requestedTime) : hazardSnapshots.get(slot)
+        if (requestedTime && !snap) return res.status(404).end()
         const b=renderHazardTile(snap?.cells || [],z,x,y,{vessel:snap?.vessel,evaluatedAt:snap?.time})
         res.set('Content-Type','image/png'); res.set('Cache-Control','public, max-age=15'); res.send(b)
       } catch (e) { res.status(500).end() }
@@ -1645,7 +1664,7 @@ module.exports = function (app) {
     app.registerResourceProvider({ type: 'stormIntelligence', methods: { listResources: async () => radarResources(), getResource: async id => { const all = await radarResources(); if (!all[id]) throw new Error(`Storm Intelligence resource not found: ${id}`); return all[id] }, setResource: async () => { throw new Error('read-only') }, deleteResource: async () => { throw new Error('read-only') } } })
     // v1.x compatibility alias; deprecated and scheduled for removal in v3.
     app.registerResourceProvider({ type: 'weatherRadar', methods: { listResources: async () => { const all = await radarResources(); return Object.fromEntries(Object.entries(all).map(([k,v]) => [k, { ...v, deprecated: true, replacement: 'stormIntelligence' }])) }, getResource: async id => { const all = await radarResources(); if (!all[id]) throw new Error(`Deprecated weatherRadar resource not found: ${id}`); return { ...all[id], deprecated: true, replacement: 'stormIntelligence' } }, setResource: async () => { throw new Error('read-only') }, deleteResource: async () => { throw new Error('read-only') } } })
-    app.registerResourceProvider({ type: 'charts', methods: { listResources: async () => charts, getResource: async id => { if (!charts[id]) throw new Error(`Chart not found: ${id}`); return charts[id] }, setResource: async () => { throw new Error('read-only') }, deleteResource: async () => { throw new Error('read-only') } } })
+    app.registerResourceProvider({ type: 'charts', methods: { listResources: async () => visibleChartResources(charts), getResource: async id => { if (!charts[id]) throw new Error(`Chart not found: ${id}`); return charts[id] }, setResource: async () => { throw new Error('read-only') }, deleteResource: async () => { throw new Error('read-only') } } })
     const manifest = extensionManifest(plugin.id, plugin.version)
     app.registerResourceProvider({ type: 'plotterExtensions', methods: { listResources: async () => ({ [plugin.id]: manifest }), getResource: async id => { if (id !== plugin.id) throw new Error('Extension not found'); return manifest }, setResource: async () => { throw new Error('read-only') }, deleteResource: async () => { throw new Error('read-only') } } })
     running = true; schedule(); status('Storm Intelligence starting')
@@ -1729,7 +1748,7 @@ module.exports = function (app) {
     minZoom: { type: 'integer', minimum: 0, maximum: 22, default: 4 }, maxZoom: { type: 'integer', minimum: 0, maximum: 22, default: 13 }, cacheSeconds: { type: 'integer', minimum: 0, maximum: 3600, default: 60 }, cacheEntries: { type: 'integer', minimum: 16, maximum: 10000, default: 512 }, requestTimeoutMs: { type: 'integer', minimum: 1000, maximum: 60000, default: 10000 }
   } })
 
-  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, authoritativeV3InferenceComponents, config: () => cfg, processDevelopmentCandidates, processStorm, processStormV3, processNormalizedRadarStormV3, severityLevel, operationalRisk, operationalCell, stormMessage, isOperationalApproachingCell, refreshStormThreat, cells:()=>cells, activeStormSource:()=>activeStormSource, stormRuntimeV3:()=>stormRuntimeV3, refreshActiveStormSource, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
+  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, authoritativeV3InferenceComponents, config: () => cfg, publishHazardSnapshot, hazardOverlayStatus, processDevelopmentCandidates, processStorm, processStormV3, processNormalizedRadarStormV3, severityLevel, operationalRisk, operationalCell, stormMessage, isOperationalApproachingCell, refreshStormThreat, cells:()=>cells, activeStormSource:()=>activeStormSource, stormRuntimeV3:()=>stormRuntimeV3, refreshActiveStormSource, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
   return plugin
 }
 

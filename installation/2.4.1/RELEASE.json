@@ -1,0 +1,32 @@
+{
+  "name": "signalk-storm-intelligence",
+  "version": "2.4.1",
+  "preparedAt": "2026-10-10",
+  "sourceRevision": "19b27b6ba2f0c0bdb085fff3d208e1259b4073fb",
+  "runtimeChanges": false,
+  "includedChanges": [
+    "Installation documentation",
+    "AGENTS.md included to satisfy documentation links",
+    "Removed documentation links to excluded internal board notes"
+  ],
+  "rdtResearchIncluded": false,
+  "nodeRequirement": ">=20",
+  "dependenciesBundled": false,
+  "installationNeedsInternet": true,
+  "packageBytes": 2580253,
+  "packageFileCount": 209,
+  "npmIntegrity": "sha512-99kosO8w979RSZ1ZQt1di5BOgNkVlQ06CShjdVL8/j60N/x5mWdnQ+qEAtaskEl2NpIDPDTbp0YxOHHUC3tfuQ==",
+  "verification": {
+    "quality": "passed",
+    "deterministicTests": 544,
+    "failedTests": 0,
+    "runtimeDependencyAudit": "0 vulnerabilities",
+    "packDryRun": "passed; contents reviewed",
+    "freshTarballInstall": "passed on Linux x64 with Node 20.19.2",
+    "pluginModuleLoad": "passed",
+    "nativeImageLibrary": "passed",
+    "liveSignalKServer": "not run",
+    "packagedDocumentationLinks": "passed"
+  },
+  "licence": "Apache-2.0"
+}

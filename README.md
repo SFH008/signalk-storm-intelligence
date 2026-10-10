@@ -18,7 +18,7 @@ Storm Intelligence is **not** a replacement for official warnings, competent sea
 
 ## Current release
 
-This source tree is the `2.4.1` release line. Version 2 uses the application identity **Storm Intelligence**. The earlier `weatherRadar` Signal K Resource API remains available as a deprecated read-only compatibility alias during v2; new integrations should use `stormIntelligence`.
+This source tree is the `2.4.2` release line. Version 2 uses the application identity **Storm Intelligence**. The earlier `weatherRadar` Signal K Resource API remains available as a deprecated read-only compatibility alias during v2; new integrations should use `stormIntelligence`.
 
 ## Why this project exists
 
@@ -200,6 +200,11 @@ See [`docs/storage-and-offline.md`](docs/storage-and-offline.md).
 ## Installation
 
 Node.js 20 or newer is required.
+
+For the downloadable package, follow the [installation guide](docs/installation.md),
+including target-device installation, initial configuration and rollback.
+
+Download bundles are available in the source repository's `installation/` directory.
 
 From a source checkout:
 

@@ -34,7 +34,7 @@ Prefetch configuration controls operating-area radius, zoom levels, maximum tile
 
 ## 5. Temporal playback
 
-Playback configuration controls enablement, number of advertised frame slots, timeline lookback and UI animation interval. Slots are a plotter compatibility mechanism rather than provider time semantics.
+Playback configuration controls enablement, number of advertised frame slots, timeline lookback and UI animation interval. Frame counts bound the panel history; individual frames are not advertised in the chart list. Playback uses the plotter temporal-chart capability. Slots remain available through legacy direct resources and do not define provider time semantics.
 
 ## 6. Storm tracking and alarms
 

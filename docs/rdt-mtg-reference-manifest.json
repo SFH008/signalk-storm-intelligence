@@ -1,0 +1,222 @@
+{
+  "schema": "storm-intelligence/rdt-reference-member-manifest/1",
+  "checkedAt": "2026-10-10",
+  "sourceUrl": "https://www.nwcsaf.org/Downloads/GEO/2025/Software/TDS/NWC-CDOP4-GEO-AEMET-SW-DATA-MTI1_DATASET_v2025.tgz",
+  "sourceBytes": 6855908954,
+  "retainedPrefixBytes": 2916741177,
+  "completeArchiveVerified": false,
+  "sourceVersion": "NWC/GEO v2025",
+  "regionId": "EURMLAND",
+  "members": [
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T100000Z.nc",
+      "bytes": 121036,
+      "sha256": "91c96536ef993fb7388df72eeba111e768dcd47e9cc81f5942565beb13b9f0c4"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T100000Z_010.nc",
+      "bytes": 75525,
+      "sha256": "e4707de70b592f6346b478f45099143661c1e914cc8670682d20e05b50518297"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T100000Z_020.nc",
+      "bytes": 75525,
+      "sha256": "dc067121d682c121670a2626ca21201ab941105f614a44eda503ca1840dc2e37"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T100000Z_030.nc",
+      "bytes": 75525,
+      "sha256": "a8676e20b0dd965d25c8e51e39c7c6adf33a6950d42f3f7a25837c81d65b84dc"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T100000Z_040.nc",
+      "bytes": 75525,
+      "sha256": "65fd528cd6f969bf9bddb22e8624703d9762e769b1ec3c0c9a6722055f0d429e"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T100000Z_050.nc",
+      "bytes": 75525,
+      "sha256": "84243e3a934672056481d333a3dda076b9917907a3d918e7e3fe427706fde498"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T100000Z_060.nc",
+      "bytes": 75525,
+      "sha256": "a49c132ff9278a5fa2b8be3123cfb6b5fda4a243a1a9f08bf2b5cbb939362d1e"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T101000Z.nc",
+      "bytes": 121036,
+      "sha256": "31271cd2b970ea8439d5df556016e72c8c0f1299a3b0c7856a13c68b8bffdf38"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T101000Z_010.nc",
+      "bytes": 75525,
+      "sha256": "0ef6724480d249d29624cec3bf3edd87b6307846bb693c1fac8ac75b2c57e667"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T101000Z_020.nc",
+      "bytes": 75525,
+      "sha256": "9465c4a78f75bf3e29dd81ce08ff2c0ee93e3c0142a491fbb136f7e385f62f4b"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T101000Z_030.nc",
+      "bytes": 75525,
+      "sha256": "aa7dc090e1d22e49eeabf4bfa62b32105a2b2772015a5cf183b6284f392c4a5f"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T101000Z_040.nc",
+      "bytes": 75525,
+      "sha256": "751f23a45630537cdd70d6b58e6600a8d997b261f21e1556ea395c2d881a6046"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T101000Z_050.nc",
+      "bytes": 75525,
+      "sha256": "e4075209b65c131343e40d8a51f1f5a2ae3b159fab271fe4cffffa2bfabf3f5c"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T101000Z_060.nc",
+      "bytes": 75525,
+      "sha256": "37f190a8f6ce0f337d5ac43041dd0b0e2867ea7fe3a122fb6cd2a1b0d951d5d7"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T102000Z.nc",
+      "bytes": 121036,
+      "sha256": "ebd4185621f47a70422789a2b279ed0638e8895f859d0516ac76f1c9c9ee496a"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T102000Z_010.nc",
+      "bytes": 75525,
+      "sha256": "f5b93ffc0973db04898adb06f2dc07dbb27923c93b9f2f4277edefd8c92089c1"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T102000Z_020.nc",
+      "bytes": 75525,
+      "sha256": "a63101fce40d0fe235e3e3bc582ce54c70db3fd541f0877d5720e7c77ff12265"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T102000Z_030.nc",
+      "bytes": 75525,
+      "sha256": "21343c3acaa78d776337a91ef49cc93498f615402d2017d4ec8325c6e81602f2"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T102000Z_040.nc",
+      "bytes": 75525,
+      "sha256": "a63d9a024dfd191cdafc2b0f230114c8129a89d0b6c754197113b1ac703d160f"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T102000Z_050.nc",
+      "bytes": 75525,
+      "sha256": "d65eae5c145e73f54768a6a13f0377de7b3363e9ae9624c63a842ade80837c04"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T102000Z_060.nc",
+      "bytes": 75525,
+      "sha256": "54a7f0592ae2269cd4139c1d7807c221091e28b405a0a9e600b9e99b565096d8"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T103000Z.nc",
+      "bytes": 121036,
+      "sha256": "1b3f66ac07731876325ba0f416d9aaeccc781cdd9d3fbb7c0a88b4e0113b3f4a"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T103000Z_010.nc",
+      "bytes": 75525,
+      "sha256": "fa64e84fb79db106cd8c7836a56fa9322497a4e0a63ab96079d055ea79cd37c5"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T103000Z_020.nc",
+      "bytes": 75525,
+      "sha256": "7aac4b021c37f3b812b182ef91ba769e682b5ad17b13f11fb28cf083f99aa8b9"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T103000Z_030.nc",
+      "bytes": 75525,
+      "sha256": "6df6c31816c31236cf056a5ff3274a9aa90e28760265e651893c966b1d7bd7d6"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T103000Z_040.nc",
+      "bytes": 75525,
+      "sha256": "1bd4accef9a13a1f6d05b9e314325698fbec35ff8b9c45da428564b7eabe3b31"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T103000Z_050.nc",
+      "bytes": 75525,
+      "sha256": "bcccfbe1f487923fa3d745f2ab3b20de5313109c615cf98e778a8176e71d9155"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T103000Z_060.nc",
+      "bytes": 75525,
+      "sha256": "f108ce10a1bc28a7113ec1899fd971e2ea1658dbc2cdfeaa63329265e1832cfe"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T104000Z.nc",
+      "bytes": 310953,
+      "sha256": "8c99149826ad70ddfd960eb881db8530244c832cfcf8a9d00297932a12673e25"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T104000Z_010.nc",
+      "bytes": 140152,
+      "sha256": "78f2cb54569f97cc5bae8afb8aa41a61708d4423868903fa6ad8687f9a4db6b8"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T104000Z_020.nc",
+      "bytes": 140158,
+      "sha256": "ce752f47e9947faa85f55fa4b3f380061d9fe73bbadb227ae31da3e07796e194"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T104000Z_030.nc",
+      "bytes": 140158,
+      "sha256": "e37b41a748c6784fe75366eb473914b78ef05ba88045df56edee95b4e3b14c91"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T104000Z_040.nc",
+      "bytes": 140145,
+      "sha256": "53fd536ee8e84e8d6e9e9294e57d4ab9ab1463c569b1fc9dc5be952a73743a23"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T104000Z_050.nc",
+      "bytes": 140148,
+      "sha256": "9c29b6f64f2cac5a8814f6e0a0807e002a02476425bde811a6a00b45dc8429d8"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T104000Z_060.nc",
+      "bytes": 140149,
+      "sha256": "a8835d134b7950d375f8afe54add66c62d464bf6e05aef4c094a2e084d20f71e"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T105000Z.nc",
+      "bytes": 121036,
+      "sha256": "019a5e8d9121e5950e8cab4e447bd2670bfc1d980b5ba66cac163e7ddbfca9ae"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T105000Z_010.nc",
+      "bytes": 75525,
+      "sha256": "69fccec324e0783f86ff0c9fdc5138f714945456a709a3381cae63633e1779ed"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T105000Z_020.nc",
+      "bytes": 75525,
+      "sha256": "7a5ea70fc44b155085444eafb47e9404dd86ee11d33a1284f8b075fe556fa6f9"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T105000Z_030.nc",
+      "bytes": 75525,
+      "sha256": "3580a699236afacfe2b4ee31943704c25c7849b84a0e481f49374aa6272bf618"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T105000Z_040.nc",
+      "bytes": 75525,
+      "sha256": "9edf237f2e03cb34cace8dfb6b356b6b0519708c867a99d6ca99add0d8c214fc"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T105000Z_050.nc",
+      "bytes": 75525,
+      "sha256": "60cc6425af54e2f30d52ee2e5eeaa431313b3e4ae4b6dfef494c32dfb8cce4ce"
+    },
+    {
+      "member": "export_archive/RDT/S_NWC_RDT-CW_MTI1_EURMLAND-NR_20250224T105000Z_060.nc",
+      "bytes": 75525,
+      "sha256": "72a64b73ce831996876fd070ed9a5507c1fbd1eda1f928f52474c8a1727164ef"
+    }
+  ]
+}

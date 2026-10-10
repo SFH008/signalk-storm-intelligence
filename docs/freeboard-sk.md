@@ -14,13 +14,27 @@ The local tile endpoint allows provider adaptation, persistence, offline fallbac
 
 ## 3. Temporal playback
 
-The extension exposes a radar timeline scrubber and animation controls. Current Plotter Extensions APIs can enumerate layers and alter visibility/opacity/order, but they do not retarget one chart source to a new time.
+The chart list advertises one live chart per weather product. Historical radar
+frames are selected on that chart with the standard `charts.time` capability
+and `chart.setTime`; frame 1, frame 2 and later slots are not separate entries.
+The Storm Intelligence panel uses the actual normalized observation timeline
+and sends the selected UTC timestamp unchanged. Returning to live sends `null`.
 
-The implementation therefore advertises bounded temporal frame-slot chart resources. Slot 0 is live/current and higher slots are older frames resolved from the actual provider timeline.
+Chart time metadata describes a bounded lookback window, not a guarantee that
+an observation exists at every instant. Native Freeboard time controls may
+request an unavailable instant; explicit historical requests never fall back
+to another timestamp. Legacy slot resources and URLs remain directly accessible
+for compatibility, but are excluded from collection discovery.
 
-Frame slots are a compatibility technique, not the preferred future API. A generic temporal-layer host capability would be cleaner.
+Playback requires a Freeboard version advertising `charts.time`. Older hosts
+retain live layer visibility/opacity controls, with playback controls disabled.
 
 ## 4. Hazard overlay
+
+One stable current storm-cell chart follows the newest retained snapshot. Its
+time-addressed URL requests only the exact retained snapshot; expired snapshots
+return unavailable rather than substituting current cells. Numeric snapshot
+slot URLs remain available for compatibility.
 
 Normalized storm geometry is rasterized into transparent PNG chart tiles for current Freeboard compatibility. Rendering includes the recognized cell polygon and bounding box, its evaluated observation-track history, forecast cell paths/envelopes, and—when the vessel path is projected to intersect—a dashed path from `self.navigation.position` to a marked possible-impact point. The impact marker is labelled with its projected UTC date/time and the cell severity.
 
