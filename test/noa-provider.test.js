@@ -153,3 +153,35 @@ test('NOA downloads exact native RAIN_RATE frame', async () => {
     global.fetch = originalFetch
   }
 })
+
+
+test('NOA catalogue cache starts after slow archive discovery completes', async () => {
+  const provider = new NoaProvider({baseUrl:'https://example.invalid'})
+  const originalNow = Date.now
+  let now = 100000
+  let liveQueries = 0
+  Date.now = () => now
+  provider.getJson = async requestedPath => {
+    if(requestedPath === '/data/XPol/timestamp.json'){
+      liveQueries++
+      return []
+    }
+    return [1791062930]
+  }
+  provider.archivePath = async () => {
+    now += 61000
+    return '/data/database/2026/1003/2022/XPol/'
+  }
+  try {
+    const first = await provider.latest('RAIN_RATE')
+    now += 1000
+    const second = await provider.latest('RAIN_RATE')
+    assert.equal(second.epochMs, first.epochMs)
+    assert.equal(liveQueries, 1)
+    now += 60000
+    await provider.latest('RAIN_RATE')
+    assert.equal(liveQueries, 2)
+  } finally {
+    Date.now = originalNow
+  }
+})

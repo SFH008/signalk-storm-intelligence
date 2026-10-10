@@ -9,8 +9,18 @@ function fmtTime(iso){const d=new Date(iso);return Number.isNaN(d.getTime())?'�
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function stateBadge(state){const s=String(state||'unknown').toLowerCase();return `<span class="badge ${esc(s)}">${esc(s)}</span>`}
 function evidence(cell){const bits=[];if(cell.severity!=null)bits.push(`severity ${cell.severity}`);bits.push(`confidence ${fmtPct(cell.confidence)}`);if(cell.lightning?.count10min)bits.push(`${cell.lightning.count10min} lightning / 10m`);if(cell.lightning?.jump)bits.push('lightning jump');if(cell.threatMethod)bits.push(cell.threatMethod);return bits.join(' · ')}
+function inferenceDetails(component){
+ if(component.state==='disabled')return 'Inference disabled'
+ const run=component.lastRun
+ if(run)return `${run.ok?'last run OK':'last run failed'} · ${run.durationMs??'—'} ms · ${run.count??0} cells${run.error?` · ${esc(run.error)}`:''}`
+ if(component.processedAt!=null){
+  const observedAt=new Date(component.processedAt)
+  if(Number.isFinite(observedAt.getTime()))return `Last processed observation · ${esc(observedAt.toISOString())}`
+ }
+ return 'Waiting for first inference cycle'
+}
 function componentDetails(c){if(c.id.startsWith('radar:')){const age=Number.isFinite(c.ageMs)?`${Math.round(c.ageMs/60000)} min old`:'age unknown';return `${esc(c.provider)} · ${esc(c.product)} · ${age}`}
- if(c.id.startsWith('inference:')){const r=c.lastRun;return r?`${r.ok?'last run OK':'last run failed'} · ${r.durationMs??'—'} ms · ${r.count??0} cells${r.error?` · ${esc(r.error)}`:''}`:'Waiting for first inference cycle'}
+ if(c.id.startsWith('inference:'))return inferenceDetails(c)
  if(c.id==='lightning')return `${c.observationCount||0} current observations · ${(c.providers||[]).length} provider(s)`
  if(c.id==='storm-source')return `${c.cellCount||0} tracked cells · source ${esc(c.source||'—')}`
  if(c.id==='acquisition'||c.id==='prefetch')return `${(c.targets||[]).length} target(s)`

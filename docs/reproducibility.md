@@ -609,3 +609,9 @@ When depositing a benchmark in a long-term repository, assign a DOI/versioned id
 ## 26. Minimal reproducibility claim
 
 A paper, technical report, thesis, or Signal K proposal should only claim a Storm Intelligence experiment is reproducible when an independent researcher can reconstruct the normalized evidence timeline and rerun the declared algorithms **without relying on undocumented live state**. If raw redistribution is legally impossible, the claim should be narrowed to *computational reproducibility conditional on authorized access to the cited upstream data*.
+
+For automatic radar-source handover experiments, freeze the ordered `stormSources`, `acquisitionTargets`, projection `horizonMinutes`, adapter product bounds, vessel navigation scenario, selected-source timeline and raw/normalized frame checksums. Record source changes and motion-predecessor resets. Isolated archived-frame replay verifies runtime behavior but does not establish that production underwent a handover.
+
+Freeze `hazardBodyReflectivityDbz`, `hazardSeedReflectivityDbz`, `hazardMinSeedAreaKm2` and `hazardMinRegionAreaKm2` for normalized-radar hazard experiments, together with the normalization revision and field provenance. Development-candidate filtering does not determine operational decomposed regions.
+
+For DPC VMI replay, also freeze the adapter-owned `vmiGridWidth`, `vmiGridHeight`, `vmiMaxInputPixels` and `vmiMaxRawBytes` settings, the immutable native GeoTIFF checksum, CRS/origin/resolution, and `geotiff`/`proj4` versions. See [DPC VMI normalization](dpc-vmi-normalization.md). TIFF generation metadata is not an observation timestamp.

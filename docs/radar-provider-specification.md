@@ -82,6 +82,7 @@ A provider MAY implement:
 - `downloadRaw(product, time)`;
 - `rawExtension(product)`;
 - `cellsFromRaw(product, buffer, time)`;
+- `normalizeRadarEvidence(product, buffer, frame)` for offline normalization into `storm-normalized-evidence/1`;
 - provider-specific capability metadata.
 
 Absence of a capability is normal. The adapter MUST NOT fabricate raw acquisition by saving rendered PNGs and calling them native data, and MUST NOT fabricate storm cells from an upstream product whose semantics do not define them.
@@ -142,3 +143,5 @@ Live endpoint checks are encouraged but must remain separate from deterministic 
 ## 16. Reproducibility
 
 A provider intended for historical scientific evaluation SHOULD expose or document a stable history/archive acquisition route. When provider-native raw data cannot be redistributed, the benchmark should retain request metadata and checksums according to [`reproducibility.md`](reproducibility.md).
+
+Products declaring `stormEngine: "v3"` MUST implement provider-owned `normalizeRadarEvidence`. They MUST return normalized radar reflectivity in dBZ, valid geographic dimensions/bounds, UTC observation time, scientific value semantics, a motion-background mask and provenance. This capability requires no provider-name branch in generic orchestration. Failed normalization MUST NOT enter legacy inference.

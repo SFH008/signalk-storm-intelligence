@@ -306,4 +306,4 @@ StormEngine v2
 Storm Threat
     decides WHAT that storm means for the vessel
 
-These boundaries are architecture-locked and 
+These boundaries must remain explicit when extending the runtime.

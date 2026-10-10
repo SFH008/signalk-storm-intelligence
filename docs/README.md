@@ -12,6 +12,8 @@ The documentation is organized as a technical and scientific reference for opera
 
 ## Provider integration
 
+- [`dpc-vmi-normalization.md`](dpc-vmi-normalization.md) — DPC native reflectivity normalization, V3 configuration, missing-data semantics and replay provenance.
+
 - [`data-provider-onboarding.md`](data-provider-onboarding.md) — onboarding checklist for agencies, research infrastructures, commercial services and community networks.
 - [`radar-provider-specification.md`](radar-provider-specification.md) — normative reference implementation contract for temporal radar mosaics.
 - [`observation-provider-specification.md`](observation-provider-specification.md) — normative point/density observation-provider contract.

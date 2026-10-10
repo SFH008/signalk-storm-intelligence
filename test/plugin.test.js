@@ -238,6 +238,14 @@ test('derived radar storm source feeds coherent hazards into Storm Runtime v3',a
   }
 
   const field={
+    schema:'storm-normalized-evidence/1',
+    domain:'radar',
+    quantity:'reflectivity',
+    units:'dBZ',
+    observedAt,
+    values:new Float32Array(width*height).fill(NaN),
+    valueSemantics:{representation:'measurement'},
+    provenance:{provider:'test',product:'radar'},
     width,
     height,
     bounds:[
@@ -246,6 +254,13 @@ test('derived radar storm source feeds coherent hazards into Storm Runtime v3',a
       -6.0,
       42.2
     ]
+  }
+
+  // One connected operational body with one qualifying core.
+  for(let y=40;y<44;y++){
+    for(let x=30;x<34;x++){
+      field.values[y*width+x]=47
+    }
   }
 
   assert.equal(
@@ -274,13 +289,11 @@ test('derived radar storm source feeds coherent hazards into Storm Runtime v3',a
 
   assert.equal(
     result.regions[0].properties.memberCount,
-    2
+    1
   )
 
-  assert.equal(
-    result.regions[0].properties.detection.areaKm2,
-    31
-  )
+  assert.equal(result.regions[0].properties.detection.pixelCount,16)
+  assert.ok(result.regions[0].properties.detection.areaKm2>=25)
 
   assert.equal(
     result.regions[0].properties.evidence.reflectivity.maxDbz,
@@ -1216,7 +1229,7 @@ test('v2 identity exposes stormIntelligence primary resource with deprecated wea
   const plugin=makePlugin(app)
   assert.equal(plugin.id,'signalk-storm-intelligence')
   assert.equal(plugin.name,'Storm Intelligence')
-  assert.equal(plugin.version,'2.3.1')
+  assert.equal(plugin.version,require('../package.json').version)
   plugin.start({backgroundEnabled:false,displayLayers:['radar-dpc:VMI']})
   const primary=await ps.find(x=>x.type==='stormIntelligence').methods.listResources()
   const legacy=await ps.find(x=>x.type==='weatherRadar').methods.listResources()
@@ -1363,7 +1376,7 @@ test('operational routes are read-only and administrative operations require ele
   assert.deepEqual(accessModes,['readonly']);assert.equal(typeof routes.readonly['/operational'],'function');assert.equal(routes.readonly['POST /acquire'],undefined);assert.equal(typeof routes.admin['POST /acquire'],'function')
   let payload,statusCode=200;const res={json:x=>{payload=x;return res},status:n=>{statusCode=n;return res},set(){return res},send(){return res}}
   await routes.readonly['/operational']({},res)
-  assert.equal(statusCode,200);assert.equal(payload.readOnly,true);assert.ok(Array.isArray(payload.components));assert.ok(Array.isArray(payload.approachingCells));assert.equal(payload.runtime.version,'2.3.1');assert.match(payload.semantics.risk,/not a probability/i)
+  assert.equal(statusCode,200);assert.equal(payload.readOnly,true);assert.ok(Array.isArray(payload.components));assert.ok(Array.isArray(payload.approachingCells));assert.equal(payload.runtime.version,require('../package.json').version);assert.match(payload.semantics.risk,/not a probability/i)
   plugin.stop()
 })
 
@@ -1458,6 +1471,10 @@ test('AEMET normalized radar evidence enters Storm Runtime v3 through generic ro
       new Float32Array(size)
 
     values.fill(NaN)
+    // A real reflectivity core, rather than candidate-only geometry.
+    for(let y=6;y<10;y++){
+      for(let x=6;x<10;x++)values[y*width+x]=42
+    }
 
     const motionBackgroundMask=
       new Uint8Array(size)
@@ -1498,7 +1515,7 @@ test('AEMET normalized radar evidence enters Storm Runtime v3 through generic ro
       },
       availability:{
         available:true,
-        physicalPixels:1,
+        physicalPixels:16,
         unknownPixels:0,
         totalPixels:size
       },
@@ -1649,6 +1666,10 @@ test('NOA normalized radar evidence enters Storm Runtime v3 through generic rout
 
     const values=new Float32Array(size)
     values.fill(NaN)
+    // A real reflectivity core, rather than candidate-only geometry.
+    for(let y=6;y<10;y++){
+      for(let x=6;x<10;x++)values[y*width+x]=42
+    }
 
     const motionBackgroundMask=new Uint8Array(size)
     motionBackgroundMask.fill(1)
@@ -1677,7 +1698,7 @@ test('NOA normalized radar evidence enters Storm Runtime v3 through generic rout
       },
       availability:{
         available:true,
-        physicalPixels:1,
+        physicalPixels:16,
         unavailablePixels:0,
         totalPixels:size
       },
@@ -2059,6 +2080,24 @@ test(
       }
     ]
 
+    const field={
+      schema:'storm-normalized-evidence/1',
+      domain:'radar',
+      quantity:'reflectivity',
+      units:'dBZ',
+      observedAt,
+      width:100,
+      height:100,
+      bounds:[-9,36.5,-8,37.5],
+      values:new Float32Array(10000).fill(NaN),
+      valueSemantics:{representation:'measurement'},
+      provenance:{provider:'test',product:'radar'}
+    }
+
+    for(let y=45;y<51;y++){
+      for(let x=50;x<56;x++)field.values[y*field.width+x]=42
+    }
+
     try {
       await plugin._test.lightningCycle()
 
@@ -2074,16 +2113,7 @@ test(
           candidates,
           motionFrame:null,
 
-          field:{
-            width:100,
-            height:100,
-            bounds:[
-              -9,
-              36.5,
-              -8,
-              37.5
-            ]
-          }
+          field
         })
 
       assert.equal(
@@ -2326,4 +2356,292 @@ test('storm message reports predictive CPA and TCPA when available',()=>{
   assert.match(message,/CPA 5\.0 NM/)
   assert.match(message,/TCPA 30 min/)
   assert.match(message,/severity confidence 73%/)
+})
+
+
+test('stormSources schema exposes multiple storm-source selection',()=>{
+  const app={
+    getDataDirPath:()=>path.join(os.tmpdir(),'radar-storm-sources-schema'),
+    setPluginStatus(){},debug(){},error(){},handleMessage(){},
+    getSelfPath(){return null}
+  }
+
+  const property=
+    makePlugin(app)
+      .schema()
+      .properties
+      .stormSources
+
+  assert.equal(property.type,'array')
+  assert.equal(property.uniqueItems,true)
+
+  assert.ok(property.items.enum.includes('aemet:COMPO'))
+  assert.ok(property.items.enum.includes('ipma:PCR'))
+  assert.ok(property.items.enum.includes('noa:RAIN_RATE'))
+})
+
+
+test('stormSources accepts multiple valid sources and removes duplicates',()=>{
+  const app={
+    getDataDirPath:()=>path.join(os.tmpdir(),'radar-multi-storm-source-config'),
+    setPluginStatus(){},debug(){},error(){},handleMessage(){},
+    getSelfPath(){return null},
+    registerResourceProvider(){}
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSources:[
+      'aemet:COMPO',
+      'ipma:PCR',
+      'aemet:COMPO',
+      'not-a-provider:BAD'
+    ],
+    acquisitionTargets:[
+      'aemet:COMPO',
+      'ipma:PCR'
+    ]
+  })
+
+  try {
+    assert.deepEqual(
+      plugin._test.config().stormSources,
+      [
+        'aemet:COMPO',
+        'ipma:PCR'
+      ]
+    )
+  } finally {
+    plugin.stop()
+  }
+})
+
+
+test('legacy stormSource migrates to one-element stormSources',()=>{
+  const app={
+    getDataDirPath:()=>path.join(os.tmpdir(),'radar-legacy-storm-source-config'),
+    setPluginStatus(){},debug(){},error(){},handleMessage(){},
+    getSelfPath(){return null},
+    registerResourceProvider(){}
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSource:'ipma:PCR',
+    acquisitionTargets:['ipma:PCR']
+  })
+
+  try {
+    assert.deepEqual(
+      plugin._test.config().stormSources,
+      ['ipma:PCR']
+    )
+  } finally {
+    plugin.stop()
+  }
+})
+
+
+test('plugin automatically selects active storm source from vessel coverage',()=>{
+  const app={
+    getDataDirPath:()=>path.join(os.tmpdir(),'storm-active-source'),
+    setPluginStatus(){},
+    debug(){},
+    error(){},
+    handleMessage(){},
+    registerResourceProvider(){},
+
+    getSelfPath(key){
+      const values={
+        'navigation.position.value':{
+          longitude:-3.70,
+          latitude:40.40
+        },
+        'navigation.speedOverGround.value':0,
+        'navigation.courseOverGroundTrue.value':0
+      }
+
+      return values[key] ?? null
+    }
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+
+    stormSources:[
+      'ipma:PCR',
+      'aemet:COMPO'
+    ],
+
+    acquisitionTargets:[
+      'ipma:PCR',
+      'aemet:COMPO'
+    ]
+  })
+
+  try {
+    assert.equal(
+      plugin._test.activeStormSource(),
+      'aemet:COMPO'
+    )
+
+    // Legacy compatibility remains unchanged.
+    assert.equal(
+      plugin._test.config().stormSource,
+      'ipma:PCR'
+    )
+  } finally {
+    plugin.stop()
+  }
+})
+
+
+test('active storm source follows changing vessel coverage',()=>{
+  let position={
+    longitude:-9.20,
+    latitude:38.70
+  }
+
+  const app={
+    getDataDirPath:()=>path.join(os.tmpdir(),'storm-dynamic-source'),
+    setPluginStatus(){},debug(){},error(){},handleMessage(){},
+    registerResourceProvider(){},
+
+    getSelfPath(key){
+      if(key==='navigation.position.value')return position
+      if(key==='navigation.speedOverGround.value')return 0
+      if(key==='navigation.courseOverGroundTrue.value')return 0
+      return null
+    }
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSources:[
+      'ipma:PCR',
+      'aemet:COMPO'
+    ],
+    acquisitionTargets:[
+      'ipma:PCR',
+      'aemet:COMPO'
+    ]
+  })
+
+  try {
+    assert.equal(
+      plugin._test.activeStormSource(),
+      'ipma:PCR'
+    )
+
+    position={
+      longitude:-3.70,
+      latitude:40.40
+    }
+
+    plugin._test.refreshActiveStormSource()
+
+    assert.equal(
+      plugin._test.activeStormSource(),
+      'aemet:COMPO'
+    )
+  } finally {
+    plugin.stop()
+  }
+})
+
+
+test('storm source handover preserves runtime but clears previous radar motion frame',()=>{
+  let position={
+    longitude:-9.20,
+    latitude:38.70
+  }
+
+  const app={
+    getDataDirPath:()=>path.join(os.tmpdir(),'storm-source-handover'),
+    setPluginStatus(){},debug(){},error(){},handleMessage(){},
+    registerResourceProvider(){},
+
+    getSelfPath(key){
+      if(key==='navigation.position.value')return position
+      if(key==='navigation.speedOverGround.value')return 0
+      if(key==='navigation.courseOverGroundTrue.value')return 0
+      return null
+    }
+  }
+
+  const plugin=makePlugin(app)
+
+  plugin.start({
+    backgroundEnabled:false,
+    stormSources:[
+      'ipma:PCR',
+      'aemet:COMPO'
+    ],
+    acquisitionTargets:[
+      'ipma:PCR',
+      'aemet:COMPO'
+    ]
+  })
+
+  try {
+    assert.equal(
+      plugin._test.activeStormSource(),
+      'ipma:PCR'
+    )
+
+    const runtimeBefore=
+      plugin._test.stormRuntimeV3()
+
+    runtimeBefore.previousMotionFrame={
+      marker:'ipma-frame'
+    }
+
+    position={
+      longitude:-3.70,
+      latitude:40.40
+    }
+
+    plugin._test.refreshActiveStormSource()
+
+    assert.equal(
+      plugin._test.activeStormSource(),
+      'aemet:COMPO'
+    )
+
+    assert.equal(
+      plugin._test.stormRuntimeV3(),
+      runtimeBefore
+    )
+
+    assert.equal(
+      runtimeBefore.previousMotionFrame,
+      null
+    )
+  } finally {
+    plugin.stop()
+  }
+})
+
+test('hazard configuration defaults and persisted bounds agree with schema',()=>{
+  const plugin=makePlugin({registerResourceProvider(){},getDataDirPath:()=>path.join(os.tmpdir(),'storm-hazard-config'),getSelfPath(){return null},setPluginStatus(){},debug(){},error(){}})
+  const keys=['hazardBodyReflectivityDbz','hazardSeedReflectivityDbz','hazardMinSeedAreaKm2','hazardMinRegionAreaKm2']
+  for(const key of keys){
+    assert.equal(plugin.schema().properties[key].default,makePlugin._test.DEFAULTS[key])
+  }
+  plugin.start({backgroundEnabled:false,hazardBodyReflectivityDbz:-100,hazardSeedReflectivityDbz:100,hazardMinSeedAreaKm2:-1,hazardMinRegionAreaKm2:Infinity})
+  try{
+    const cfg=plugin._test.config()
+    assert.equal(cfg.hazardBodyReflectivityDbz,-20)
+    assert.equal(cfg.hazardSeedReflectivityDbz,80)
+    assert.equal(cfg.hazardMinSeedAreaKm2,0)
+    assert.equal(cfg.hazardMinRegionAreaKm2,25)
+  }finally{plugin.stop()}
 })

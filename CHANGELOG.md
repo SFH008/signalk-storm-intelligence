@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 2.4.1 - 2026-10-10
+
+- Corrected the operational dashboard to display V3's last processed observation timestamp instead of incorrectly claiming it is waiting for its first inference cycle. Legacy inference diagnostics and provider availability warnings remain visible.
+
+## 2.4.0 - 2026-10-10
+
+- Enabled Radar-DPC VMI native GeoTIFF acquisition as a normalized radar source for Storm Runtime V3, alongside AEMET COMPO, IPMA PCR and NOA rainfall rate.
+- Moved radar normalization and V3 routing declarations into provider interfaces, preserving existing HRD configuration and preventing failed V3 normalization from reaching legacy inference.
+- Added bounded download/decoding, configurable nearest-neighbour reprojection, missing-data safeguards, input checksums, deterministic integration tests and an explicit DPC VMI live check.
+- Added the JavaScript GeoTIFF decoder; refreshed vulnerable development transitive dependencies.
+
+## 2.3.2 - 2026-10-09
+
+- Raised adm-zip and sharp minimum patch versions to address dependency security advisories.
+- Added ordered radar-source selection using vessel position and projected coverage, preserving tracker state while resetting source-local motion on handover.
+- Built operational hazard regions from normalized reflectivity bodies and qualifying cores, with configurable thresholds and grid validation.
+- Corrected NOA discovery-cache expiry to begin after retrieval completes.
+- Updated deterministic V3 integration fixtures for normalized radar-field hazard construction and source handover.
+
 ## 2.5.9 - 2026-08-21
 
 - Fixed Radar-DPC VMI/SRI/accumulated-rain overlays to render the current v2 time-qualified WebP data tiles instead of associating new REST timestamps with divergent legacy-WMS imagery; transport, decoding and palettes remain isolated in the Radar-DPC adapter.

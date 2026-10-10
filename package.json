@@ -1,6 +1,6 @@
 {
   "name": "signalk-storm-intelligence",
-  "version": "2.3.1",
+  "version": "2.4.1",
   "description": "Signal K severe-weather decision support with multisensor storm tracking, vessel-relative hazards, radar overlays, offline replay, and a read-only operational WebApp.",
   "main": "index.js",
   "type": "commonjs",
@@ -53,11 +53,12 @@
   ],
   "dependencies": {
     "@jsquash/webp": "^1.5.0",
-    "adm-zip": "^0.6.0",
+    "adm-zip": "^0.6.1",
+    "geotiff": "^3.0.5",
     "polygon-clipping": "^0.15.7",
     "proj4": "^2.19.10",
     "shapefile": "^0.6.6",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "tar-stream": "^3.2.1"
   },
   "scripts": {
@@ -70,7 +71,8 @@
     "train:reference-dnn": "node scripts/train-reference-dnn.js",
     "live-check:llm": "node scripts/live-check-llm.js",
     "audit": "npm audit --omit=dev --audit-level=high",
-    "quality": "node scripts/quality-check.js && npm run check && npm run audit"
+    "quality": "node scripts/quality-check.js && npm run check && npm run audit",
+    "live-check:dpc-vmi": "node scripts/live-check-dpc-vmi.js"
   },
   "repository": {
     "type": "git",

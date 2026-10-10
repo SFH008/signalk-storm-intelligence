@@ -118,3 +118,33 @@ test('Radar-DPC binary parser validates and normalizes polygon attributes and co
 test('Radar-DPC binary parser rejects truncated data',()=>{
   assert.throws(()=>parseHrdBinary(Buffer.from([72,1,0,1])),/truncated/)
 })
+
+test('DPC VMI raw download preserves exact requested time and bounds response size/content', async () => {
+  const { Readable } = require('node:stream')
+  const { dpcVmiFixture } = require('./helpers/dpc-vmi-fixture')
+  const oldFetch = global.fetch
+  const bytes = await dpcVmiFixture()
+  let data = bytes, contentType = 'image/tiff', length = null
+  const calls = []
+  global.fetch = async (url, options) => {
+    calls.push({url:String(url),options})
+    if (calls.length % 2 === 1) return response({json:async()=>({url:'https://native.example/frame.tif',key:'frame.tif'})})
+    return response({headers:{get:key=>key==='content-type'?contentType:length},body:Readable.from([data])})
+  }
+  try {
+    const p = provider()
+    assert.deepEqual((await p.downloadRaw('VMI',1787081700000)).buffer,bytes)
+    assert.deepEqual(JSON.parse(calls[0].options.body),{productType:'VMI',productDate:1787081700000})
+    contentType = 'text/html'
+    await assert.rejects(p.downloadRaw('VMI',1787081700000),/content type/)
+    contentType = 'image/tiff'
+    data = Buffer.from('bad')
+    await assert.rejects(p.downloadRaw('VMI',1787081700000),/TIFF signature/)
+    data = bytes
+    length = String(p.cfg.vmiMaxRawBytes + 1)
+    await assert.rejects(p.downloadRaw('VMI',1787081700000),/size limit/)
+    length = null
+    p.cfg.vmiMaxRawBytes = 4
+    await assert.rejects(p.downloadRaw('VMI',1787081700000),/size limit/)
+  } finally {global.fetch=oldFetch}
+})

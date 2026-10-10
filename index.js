@@ -10,10 +10,6 @@ const { InferenceEngine } = require('./lib/inference-engine')
 const { playbackSlots, resolveSlot, playbackChartId, playbackChartName } = require('./lib/playback')
 const { assertProvider, describeProvider, productCapabilities } = require('./lib/provider-contract')
 const { hazardsFromCells, renderHazardTile, renderDevelopmentCandidateTile, renderRadarEchoStructureTile, geometryBounds } = require('./lib/hazard-overlay')
-const { normalizeAemetCompo } = require('./lib/aemet-compo-evidence')
-const {
-  normalizeIpmaPcr
-} = require('./lib/ipma-pcr-evidence')
 
 const {
   motionFrameFromNormalizedRadarEvidence
@@ -27,7 +23,6 @@ const {
 const {
   assessStormThreat
 } = require('./lib/storm-threat')
-const { normalizeNoaRainRate } = require('./lib/noa-rain-rate-evidence')
 const { detectRadarEchoStructures, detectStormCandidates } = require('./lib/storm-detector')
 const { discoverObservationAdapters, defaultsFromObservationAdapters, observationProviderSettingsSchema, instantiateObservationAdapters } = require('./lib/observation-provider-registry')
 const { describeObservationProvider } = require('./lib/observation-provider-contract')
@@ -36,6 +31,10 @@ const { WeatherApiFusion, attachWeatherApiEvidence } = require('./lib/weather-ap
 const { renderLightningTile } = require('./lib/lightning-overlay')
 const { EnvironmentFusion } = require('./lib/environment-fusion')
 const { PACKAGE_VERSION } = require('./lib/version')
+const {
+  selectStormSource,
+  projectVesselPosition
+}=require('./lib/storm-source-selector')
 
 const ADAPTERS = discoverAdapters()
 const OBSERVATION_ADAPTERS = discoverObservationAdapters()
@@ -54,10 +53,12 @@ const DEFAULTS = Object.freeze({
   prefetchMaxTilesPerCycle: 1024, prefetchStorageMaxMB: 512, prefetchStorageMaxAgeHours: 6, prefetchConcurrency: 6,
   playbackEnabled: true, playbackSlots: 13, playbackTimelineMinutes: 180, playbackIntervalMs: 900,
   hazardOverlayEnabled: true, hazardOverlaySlots: 24, hazardOverlayOpacity: 0.8,
+  hazardBodyReflectivityDbz: 30, hazardSeedReflectivityDbz: 36,
+  hazardMinSeedAreaKm2: 25, hazardMinRegionAreaKm2: 25,
   candidateMinReflectivityDbz: 24,
   candidateMinAreaKm2: 5,
   candidateMaxAreaKm2: 1000,
-  stormEnabled: true, stormSource: ADAPTER_DEFAULTS.stormSource, warnDistanceNm: 20, alarmDistanceNm: 8,
+  stormEnabled: true, stormSource: ADAPTER_DEFAULTS.stormSource, stormSources: [ADAPTER_DEFAULTS.stormSource], warnDistanceNm: 20, alarmDistanceNm: 8,
   horizonMinutes: 60, warnSeverity: 3, alarmSeverity: 4, matchDistanceNm: 30,
   notificationPath: 'notifications.environment.weather.storm',
   stormHistoryFrames: 8, stormPathStepSec: 60, stormBaseUncertaintyNm: 1, stormMaxUncertaintyNm: 10,
@@ -282,7 +283,7 @@ function authoritativeV3InferenceComponents(runtime, enabled=true) {
 module.exports = function (app) {
   const plugin = { id: 'signalk-storm-intelligence', name: 'Storm Intelligence', version: PACKAGE_VERSION }
   let cfg = { ...DEFAULTS }, providers = new Map(), observationProviders = new Map(), inferenceAlgorithms = new Map(), inferenceEngine, cache = makeCache(DEFAULTS.cacheEntries), charts = {}, storage, tileStore, environmentFusion, weatherApiFusion
-  let timer = null, startupTimer = null, running = false, busy = false, lastAcquired = {}, lastPrefetched = {}, cells = [], radarEchoStructures = [], radarEchoStructuresTime = null, developmentCandidates = [], developmentCandidatesTime = null, lightningStrikes = [], lightningCoverage = {available:false,providersQueried:0,providersSucceeded:0,updatedAt:null}, lightningState = 'normal', lightningMessage = '', environmentContext = {available:false}, weatherApiContext = {available:false}, hazardSnapshots = new Map(), hazardSequence = 0, activeHazardSlot = 0, lastAlarm = 'normal', lastAlarmText = '', lastError = null, assetsMounted = false, stormRuntimeV3 = null
+  let timer = null, startupTimer = null, running = false, busy = false, lastAcquired = {}, lastPrefetched = {}, cells = [], radarEchoStructures = [], radarEchoStructuresTime = null, developmentCandidates = [], developmentCandidatesTime = null, lightningStrikes = [], lightningCoverage = {available:false,providersQueried:0,providersSucceeded:0,updatedAt:null}, lightningState = 'normal', lightningMessage = '', environmentContext = {available:false}, weatherApiContext = {available:false}, hazardSnapshots = new Map(), hazardSequence = 0, activeHazardSlot = 0, lastAlarm = 'normal', lastAlarmText = '', lastError = null, assetsMounted = false, stormRuntimeV3 = null, activeStormSource = null
   const activeErrors = new Map()
   const syncLastError = () => { lastError = [...activeErrors.values()].at(-1)?.message || null }
   const err = (message, component = 'runtime') => { activeErrors.set(component, { message, at: new Date().toISOString() }); syncLastError(); app.error?.(message) }
@@ -309,6 +310,73 @@ module.exports = function (app) {
 
   function getProvider(id) { const p = providers.get(id); if (!p) throw Object.assign(new Error(`Radar mosaic provider not enabled: ${id}`), { statusCode: 404 }); return p }
   function getProduct(provider, product) { const m = provider.products()[product]; if (!m) throw Object.assign(new Error(`Unsupported product ${provider.id}:${product}`), { statusCode: 404 }); return m }
+
+  function refreshActiveStormSource() {
+    const ownship=vessel()
+
+    const sourceCandidates=
+      cfg.stormSources
+        .map(source=>{
+          const t=splitTarget(source)
+          if(!t)return null
+
+          const provider=providers.get(t.providerId)
+          const product=provider?.products?.()?.[t.product]
+
+          if(
+            !product ||
+            !Array.isArray(product.bounds)
+          ){
+            return null
+          }
+
+          return {
+            source,
+            bounds:product.bounds
+          }
+        })
+        .filter(Boolean)
+
+    const projectedPosition=
+      projectVesselPosition({
+        position:ownship.position,
+        sog:ownship.sog,
+        cog:ownship.cog,
+        horizonMinutes:cfg.horizonMinutes
+      })
+
+    const selected=
+      selectStormSource({
+        sources:sourceCandidates,
+        activeSource:activeStormSource,
+        position:ownship.position,
+        projectedPosition:
+          projectedPosition ??
+          ownship.position
+      }).source
+
+    const next=
+      selected ??
+      activeStormSource ??
+      cfg.stormSource
+
+    if(
+      activeStormSource &&
+      next!==activeStormSource &&
+      stormRuntimeV3
+    ){
+      /*
+       * Provider handover must never compare radar rasters from
+       * different providers. Preserve StormEngineV3/tracker state,
+       * but discard the source-local optical-flow predecessor.
+       */
+      stormRuntimeV3.previousMotionFrame=null
+    }
+
+    activeStormSource=next
+
+    return activeStormSource
+  }
 
   function notifyPath(path,state,message,details={}) {
     app.handleMessage?.(plugin.id,{context:'vessels.self',updates:[{source:{label:plugin.id},timestamp:new Date().toISOString(),values:[{path,value:{state,method:['visual','sound'],message,stormIntelligence:details}}]}]})
@@ -492,7 +560,7 @@ module.exports = function (app) {
   }
 
   function currentHazards() {
-    return { source: cfg.stormSource, state: lastAlarm, activeSlot: activeHazardSlot, chartId: hazardChartId(activeHazardSlot), chartName: hazardChartName(activeHazardSlot), ...hazardsFromCells(cells, null, { vessel: vessel() }) }
+    return { source: activeStormSource, state: lastAlarm, activeSlot: activeHazardSlot, chartId: hazardChartId(activeHazardSlot), chartName: hazardChartName(activeHazardSlot), ...hazardsFromCells(cells, null, { vessel: vessel() }) }
   }
 
   function hazardOverlayStatus() {
@@ -631,7 +699,7 @@ module.exports = function (app) {
     }
     components.push(componentState('acquisition', 'Background acquisition', !cfg.backgroundEnabled ? 'disabled' : cfg.acquisitionTargets.length && Object.keys(lastAcquired).length === 0 ? 'waiting' : 'healthy', { targets: cfg.acquisitionTargets, lastAcquired, storage: status.acquisition?.storage || null }))
     components.push(componentState('prefetch', 'Offline prefetch', !cfg.prefetchEnabled ? 'disabled' : 'healthy', { targets: cfg.prefetchTargets, lastPrefetched, storage: status.prefetch?.storage || null }))
-    components.push(componentState('storm-source', 'Storm-cell source', !cfg.stormEnabled ? 'disabled' : cells.length ? 'healthy' : 'waiting', { source: cfg.stormSource, cellCount: cells.length, state: lastAlarm }))
+    components.push(componentState('storm-source', 'Storm-cell source', !cfg.stormEnabled ? 'disabled' : cells.length ? 'healthy' : 'waiting', { source: activeStormSource, cellCount: cells.length, state: lastAlarm }))
     components.push(componentState('lightning', 'Lightning observations', !cfg.lightningEnabled ? 'disabled' : observationProviders.size === 0 ? 'warning' : lightningStrikes.length ? 'healthy' : 'waiting', { providers: [...observationProviders.keys()], observationCount: lightningStrikes.length, state: lightningState }))
     components.push(componentState('onboard-environment', 'Onboard environmental sensors', !cfg.onboardEnvironmentEnabled ? 'disabled' : environmentContext?.available ? 'healthy' : 'waiting', { evidence: environmentContext }))
     components.push(componentState('weather-api', 'Signal K Weather API observations', !cfg.weatherApiObservationsEnabled ? 'disabled' : weatherApiContext?.available ? 'healthy' : 'waiting', { sampleCount: weatherApiContext?.samples?.length || 0, evidence: weatherApiContext }))
@@ -693,7 +761,7 @@ module.exports = function (app) {
       prefetch: { enabled: cfg.prefetchEnabled, targets: cfg.prefetchTargets, radiusNm: cfg.prefetchRadiusNm, zooms: cfg.prefetchZooms, lastPrefetched, storage: await tileStore?.stats() },
       storm: {
         enabled:cfg.stormEnabled,
-        source:cfg.stormSource,
+        source:activeStormSource,
         state:lastAlarm,
         message:lastAlarmText,
         cells,
@@ -827,26 +895,8 @@ module.exports = function (app) {
     const provider=getProvider(t.providerId)
     const meta=getProduct(provider,t.product)
 
-    let evidence
-
-    if(t.providerId==='aemet' && t.product==='COMPO'){
-      evidence=await normalizeAemetCompo(buffer,{
-        bounds:meta.bounds,
-        observedAt:latest.epochMs
-      })
-    }else if(t.providerId==='ipma' && t.product==='PCR'){
-      evidence=normalizeIpmaPcr(buffer,{
-        bounds:meta.bounds,
-        observedAt:latest.epochMs
-      })
-    }else if(t.providerId==='noa' && t.product==='RAIN_RATE'){
-      evidence=await normalizeNoaRainRate(buffer,{
-        bounds:meta.bounds,
-        observedAt:latest.epochMs
-      })
-    }else{
-      return false
-    }
+    if (meta.stormEngine !== 'v3' || typeof provider.normalizeRadarEvidence !== 'function') return false
+    const evidence = await provider.normalizeRadarEvidence(t.product, buffer, latest)
 
     const detectedStructures=detectRadarEchoStructures(evidence,{
       minAreaKm2:25,
@@ -1013,7 +1063,7 @@ module.exports = function (app) {
   }={}) {
     if(
       !cfg.stormEnabled ||
-      target !== cfg.stormSource
+      target!==activeStormSource
     ){
       return null
     }
@@ -1043,7 +1093,12 @@ module.exports = function (app) {
       buildHazardRegions(
         candidates,
         {
-          observedAt
+          observedAt,
+          field,
+          bodyReflectivityDbz: cfg.hazardBodyReflectivityDbz,
+          seedReflectivityDbz: cfg.hazardSeedReflectivityDbz,
+          minSeedAreaKm2: cfg.hazardMinSeedAreaKm2,
+          minRegionAreaKm2: cfg.hazardMinRegionAreaKm2
         }
       )
 
@@ -1197,11 +1252,7 @@ module.exports = function (app) {
         evidence
       )
 
-    const field={
-      width:evidence.width,
-      height:evidence.height,
-      bounds:evidence.bounds
-    }
+    const field=evidence
 
     return processStormV3({
       target,
@@ -1214,25 +1265,9 @@ module.exports = function (app) {
 
 
   async function processStorm(target, latest, buffer, derivedCandidates = null) {
-    /*
-     * IPMA PCR is a V3-only storm source.
-     *
-     * Its normalized evidence, hazard-region construction, motion field,
-     * identity and authoritative forecasts belong to Storm Runtime v3.
-     * Never allow PCR to fall through to the legacy storm engine.
-     */
-    if (
-      target === 'ipma:PCR' ||
-      target === 'aemet:COMPO' ||
-      target === 'noa:RAIN_RATE'
-    ) {
-      throw new Error(
-        `${target} must use Storm Runtime v3`
-      )
-    }
-
-    if (!cfg.stormEnabled || target !== cfg.stormSource) return
     const t = splitTarget(target), provider = getProvider(t.providerId), meta = getProduct(provider, t.product)
+    if (meta.stormEngine === 'v3') throw new Error(`${target} must use Storm Runtime v3`)
+    if (!cfg.stormEnabled || target!==activeStormSource) return
     const caps = productCapabilities(provider, meta)
     let features
     if (caps.cells) features = await provider.cellsFromRaw(t.product, buffer)
@@ -1291,19 +1326,37 @@ module.exports = function (app) {
       )
     }
 
+    /*
+     * Configured but inactive storm sources are kept warm through
+     * acquisition, storage and normalization, but must never advance
+     * either authoritative V3 or the legacy storm engine.
+     */
     if(
-      target===cfg.stormSource &&
+      cfg.stormSources.includes(target) &&
+      target!==activeStormSource
+    ){
+      lastAcquired[target]=latest.epochMs
+      return true
+    }
+
+    const normalizedRadarV3=
       processed?.evidence?.schema==='storm-normalized-evidence/1' &&
       processed.evidence.domain==='radar' &&
       processed.evidence.quantity==='reflectivity' &&
       processed.evidence.units==='dBZ' &&
       processed.evidence.motionBackgroundMask instanceof Uint8Array
-    ){
-      await processNormalizedRadarStormV3({
-        target,
-        latest,
-        processed
-      })
+
+    if(normalizedRadarV3){
+      if(
+        cfg.stormSources.includes(target) &&
+        target===activeStormSource
+      ){
+        await processNormalizedRadarStormV3({
+          target,
+          latest,
+          processed
+        })
+      }
     }else{
       await processStorm(
         target,
@@ -1450,6 +1503,8 @@ module.exports = function (app) {
     busy = true
     const results=[],errors=[]
     try {
+      refreshActiveStormSource()
+
       if(cfg.onboardEnvironmentEnabled) environmentContext=environmentFusion.sample(app)
       if(cfg.weatherApiObservationsEnabled){const pos=vessel().position;weatherApiContext=pos?await weatherApiFusion.sample(app,pos):{available:false,reason:'no-position',samples:[]}}
       await lightningCycle()
@@ -1501,6 +1556,24 @@ module.exports = function (app) {
     const legacyAdapter = [...ADAPTERS.values()].find(a => a.legacyDefault)
     const legacyDisplay = legacyAdapter && Array.isArray(settings.displayProducts) ? settings.displayProducts.map(p => `${legacyAdapter.id}:${p}`) : null
     const legacyAcquire = legacyAdapter && Array.isArray(settings.acquireProducts) ? settings.acquireProducts.map(p => `${legacyAdapter.id}:${p}`) : null
+    const legacyStormSource =
+      validTarget(settings.stormSource)
+        ? splitTarget(settings.stormSource).key
+        : DEFAULTS.stormSource
+
+    let configuredStormSources =
+      Array.isArray(settings.stormSources)
+        ? [...new Set(
+            settings.stormSources
+              .filter(validTarget)
+              .map(source => splitTarget(source).key)
+          )]
+        : [legacyStormSource]
+
+    if (!configuredStormSources.length) {
+      configuredStormSources = [legacyStormSource]
+    }
+
     cfg = {
       ...DEFAULTS, ...settings,
       providerSettings: settings.providerSettings && typeof settings.providerSettings === 'object' ? settings.providerSettings : {},
@@ -1509,7 +1582,19 @@ module.exports = function (app) {
       enabledProviders: Array.isArray(settings.enabledProviders) ? [...new Set(settings.enabledProviders.filter(id => KNOWN_PRODUCTS[id]))] : [...DEFAULTS.enabledProviders],
       displayLayers: parseTargets(settings.displayLayers || legacyDisplay, DEFAULTS.displayLayers),
       acquisitionTargets: parseTargets(settings.acquisitionTargets || legacyAcquire, DEFAULTS.acquisitionTargets),
-      stormSource: validTarget(settings.stormSource) ? splitTarget(settings.stormSource).key : DEFAULTS.stormSource,
+      ...Object.fromEntries([
+        ['hazardBodyReflectivityDbz', -20, 80],
+        ['hazardSeedReflectivityDbz', -20, 80],
+        ['hazardMinSeedAreaKm2', 0, 1000000],
+        ['hazardMinRegionAreaKm2', 0, 1000000]
+      ].map(([key, min, max]) => [key,
+        settings[key] != null && Number.isFinite(Number(settings[key]))
+          ? Math.max(min, Math.min(max, Number(settings[key])))
+          : DEFAULTS[key]
+      ])),
+      stormSources: configuredStormSources,
+      // Transitional compatibility: legacy callers still see the first configured source.
+      stormSource: configuredStormSources[0],
       pollSeconds: Math.max(15, Number(settings.pollSeconds) || DEFAULTS.pollSeconds),
       storageMaxMB: Number.isFinite(Number(settings.storageMaxMB)) ? Math.max(0, Number(settings.storageMaxMB)) : DEFAULTS.storageMaxMB,
       storageMaxAgeHours: Number.isFinite(Number(settings.storageMaxAgeHours)) ? Math.max(0, Number(settings.storageMaxAgeHours)) : DEFAULTS.storageMaxAgeHours,
@@ -1534,10 +1619,14 @@ module.exports = function (app) {
       inferenceAlgorithms:Array.isArray(settings.inferenceAlgorithms)?[...new Set(settings.inferenceAlgorithms.filter(id=>INFERENCE_ALGORITHMS.has(id)))]:[...DEFAULTS.inferenceAlgorithms], inferenceStrategy:['max-severity','weighted-confidence'].includes(settings.inferenceStrategy)?settings.inferenceStrategy:DEFAULTS.inferenceStrategy, inferenceAlgorithmSettings:settings.inferenceAlgorithmSettings&&typeof settings.inferenceAlgorithmSettings==='object'?settings.inferenceAlgorithmSettings:{}
     }
     // Any configured layer/acquisition/storm source implicitly enables its provider.
-    for (const key of [...cfg.displayLayers, ...cfg.acquisitionTargets, ...cfg.prefetchTargets, cfg.stormSource]) {
+    for (const key of [...cfg.displayLayers, ...cfg.acquisitionTargets, ...cfg.prefetchTargets, ...cfg.stormSources]) {
       const t = splitTarget(key); if (t && !cfg.enabledProviders.includes(t.providerId)) cfg.enabledProviders.push(t.providerId)
     }
     providers = instantiateAdapters(ADAPTERS, cfg.enabledProviders, cfg, cfg.providerSettings, settings)
+
+    activeStormSource = null
+    refreshActiveStormSource()
+
     observationProviders=instantiateObservationAdapters(OBSERVATION_ADAPTERS,cfg.lightningProviders,cfg,cfg.lightningProviderSettings)
     cache = makeCache(Math.max(16, Number(cfg.cacheEntries) || DEFAULTS.cacheEntries))
     mountAssets()
@@ -1580,7 +1669,7 @@ module.exports = function (app) {
     r.get('/tiles/:provider/:product/:z/:x/:y.png', async (req, res) => { try { const p = String(req.params.product).toUpperCase(), z = Number(req.params.z), x = Number(req.params.x), y = Number(req.params.y); if (![z, x, y].every(Number.isInteger)) return res.status(400).json({ error: 'Invalid tile coordinates' }); const b = await fetchTile(req.params.provider, p, z, x, y, req.query.time, req.query.slot); res.set('Content-Type', 'image/png'); res.set('Cache-Control', `public, max-age=${cfg.cacheSeconds}`); res.send(b) } catch (e) { res.status(e.statusCode || 502).json({ error: e.message }) } })
     r.get('/operational', async (req, res) => res.json(await operationalStatus()))
     r.get('/status', async (req, res) => res.json(await radarStatus()))
-    r.get('/cells', async (req, res) => res.json({ source: cfg.stormSource, state: lastAlarm, cells }))
+    r.get('/cells', async (req, res) => res.json({ source: activeStormSource, state: lastAlarm, cells }))
     r.get('/hazards', async (req, res) => res.json(currentHazards()))
     r.get('/lightning',async(req,res)=>res.json({providers:[...observationProviders].map(([id,p])=>describeObservationProvider(p)),state:lightningState,message:lightningMessage,summary:lightningSummary(lightningStrikes,vessel().position),observations:lightningStrikes}))
     r.get('/onboard-environment',async(req,res)=>res.json(environmentContext))
@@ -1623,10 +1712,14 @@ module.exports = function (app) {
     prefetchEnabled: { title: 'Geographic radar prefetch/offline cache', type: 'boolean', default: true }, prefetchTargets: { title: 'Raster products to prefetch around own ship', type: 'array', uniqueItems: true, default: DEFAULTS.prefetchTargets, items: { type: 'string', enum: [...allRasterTargets] } }, prefetchRadiusNm: { title: 'Prefetch radius around own ship (NM)', type: 'number', minimum: 1, maximum: 500, default: 40 }, prefetchZooms: { title: 'Prefetch zoom levels', type: 'array', uniqueItems: true, default: DEFAULTS.prefetchZooms, items: { type: 'integer', minimum: 0, maximum: 22 } }, prefetchMaxTilesPerCycle: { title: 'Maximum tiles per prefetch cycle', type: 'integer', minimum: 1, maximum: 20000, default: 1024 }, prefetchConcurrency: { title: 'Concurrent upstream prefetch requests', type: 'integer', minimum: 1, maximum: 32, default: 6 }, prefetchStorageMaxMB: { title: 'Maximum rendered prefetch storage (MB, 0 unlimited)', type: 'integer', minimum: 0, default: 512 }, prefetchStorageMaxAgeHours: { title: 'Maximum rendered prefetch age (hours, 0 unlimited)', type: 'number', minimum: 0, default: 6 },
     playbackEnabled: { title: 'Time-controlled weather overlay playback charts', type: 'boolean', default: true }, playbackSlots: { title: 'Playback frame slots exposed to plotters', type: 'integer', minimum: 1, maximum: 72, default: 13 }, playbackTimelineMinutes: { title: 'Playback timeline lookback (minutes)', type: 'integer', minimum: 5, maximum: 1440, default: 180 }, playbackIntervalMs: { title: 'Freeboard animation interval (milliseconds)', type: 'integer', minimum: 250, maximum: 10000, default: 900 },
     hazardOverlayEnabled: { title: 'Storm-cell chart overlay', type: 'boolean', default: true }, hazardOverlaySlots: { title: 'Storm overlay rolling frame slots', type: 'integer', minimum: 1, maximum: 72, default: 24 }, hazardOverlayOpacity: { title: 'Default storm-cell overlay opacity', type: 'number', minimum: 0, maximum: 1, default: 0.8 },
+    hazardBodyReflectivityDbz: { title: 'Hazard body minimum reflectivity (dBZ)', type: 'number', minimum: -20, maximum: 80, default: DEFAULTS.hazardBodyReflectivityDbz },
+    hazardSeedReflectivityDbz: { title: 'Hazard core minimum reflectivity (dBZ)', type: 'number', minimum: -20, maximum: 80, default: DEFAULTS.hazardSeedReflectivityDbz },
+    hazardMinSeedAreaKm2: { title: 'Hazard core minimum area (km²)', type: 'number', minimum: 0, maximum: 1000000, default: DEFAULTS.hazardMinSeedAreaKm2 },
+    hazardMinRegionAreaKm2: { title: 'Hazard region minimum area (km²)', type: 'number', minimum: 0, maximum: 1000000, default: DEFAULTS.hazardMinRegionAreaKm2 },
     candidateMinReflectivityDbz: { title: 'Storm candidate minimum reflectivity (dBZ)', type: 'number', minimum: -20, maximum: 80, default: DEFAULTS.candidateMinReflectivityDbz },
     candidateMinAreaKm2: { title: 'Storm candidate minimum area (km²)', type: 'number', minimum: 0, maximum: 10000, default: DEFAULTS.candidateMinAreaKm2 },
     candidateMaxAreaKm2: { title: 'Storm candidate maximum area (km²)', type: 'number', minimum: 1, maximum: 1000000, default: DEFAULTS.candidateMaxAreaKm2 },
-    stormEnabled: { title: 'Approaching storm-cell alarm', type: 'boolean', default: true }, stormHistoryFrames: { title: 'Storm tracking history frames', type: 'integer', minimum: 2, maximum: 24, default: 8 }, stormPathStepSec: { title: 'Storm/vessel path intersection step (seconds)', type: 'integer', minimum: 15, maximum: 300, default: 60 }, stormBaseUncertaintyNm: { title: 'Base storm-track uncertainty (NM)', type: 'number', minimum: 0, maximum: 20, default: 1 }, stormMaxUncertaintyNm: { title: 'Maximum storm-track uncertainty (NM)', type: 'number', minimum: 1, maximum: 50, default: 10 }, stormSource: { title: 'Storm-cell source', type: 'string', enum: allStormTargets, default: DEFAULTS.stormSource },
+    stormEnabled: { title: 'Approaching storm-cell alarm', type: 'boolean', default: true }, stormHistoryFrames: { title: 'Storm tracking history frames', type: 'integer', minimum: 2, maximum: 24, default: 8 }, stormPathStepSec: { title: 'Storm/vessel path intersection step (seconds)', type: 'integer', minimum: 15, maximum: 300, default: 60 }, stormBaseUncertaintyNm: { title: 'Base storm-track uncertainty (NM)', type: 'number', minimum: 0, maximum: 20, default: 1 }, stormMaxUncertaintyNm: { title: 'Maximum storm-track uncertainty (NM)', type: 'number', minimum: 1, maximum: 50, default: 10 }, stormSource: { title: 'Storm-cell source', type: 'string', enum: allStormTargets, default: DEFAULTS.stormSource }, stormSources: { title: 'Storm-cell sources', type: 'array', uniqueItems: true, default: [...DEFAULTS.stormSources], items: { type: 'string', enum: [...allStormTargets] } },
     warnDistanceNm: { title: 'Warning CPA/distance (NM)', type: 'number', minimum: 1, default: 20 }, alarmDistanceNm: { title: 'Alarm CPA/distance (NM)', type: 'number', minimum: 0.5, default: 8 }, horizonMinutes: { title: 'Approach prediction horizon (minutes)', type: 'integer', minimum: 10, maximum: 180, default: 60 }, warnSeverity: { title: 'Warning severity threshold', type: 'number', default: 3 }, alarmSeverity: { title: 'Alarm severity threshold', type: 'number', default: 4 }, matchDistanceNm: { title: 'Cell tracking match radius (NM)', type: 'number', minimum: 1, default: 30 }, notificationPath: { title: 'Signal K notification path', type: 'string', default: DEFAULTS.notificationPath },
     lightningEnabled:{title:'Lightning observation fusion',type:'boolean',default:false}, lightningProviders:{title:'Enabled lightning observation providers',type:'array',uniqueItems:true,default:DEFAULTS.lightningProviders,items:{type:'string',enum:[...OBSERVATION_ADAPTERS.keys()]}}, lightningProviderSettings:observationProviderSettingsSchema(OBSERVATION_ADAPTERS), lightningLookbackMinutes:{title:'Lightning lookback (minutes)',type:'integer',minimum:5,maximum:180,default:30}, lightningQueryRadiusNm:{title:'Lightning query radius (NM)',type:'number',minimum:10,maximum:500,default:120}, lightningAssociationRadiusNm:{title:'Maximum strike-to-cell association distance (NM)',type:'number',minimum:.5,maximum:100,default:8}, lightningEvidenceWeight:{title:'Maximum lightning confidence contribution',type:'number',minimum:0,maximum:.3,default:.15}, lightningOverlayEnabled:{title:'Show lightning overlay in plotters',type:'boolean',default:true}, lightningOverlayOpacity:{title:'Lightning overlay opacity',type:'number',minimum:0,maximum:1,default:.9}, lightningWarningNm:{title:'Lightning warning radius (NM)',type:'number',minimum:1,default:15}, lightningAlarmNm:{title:'Lightning alarm radius (NM)',type:'number',minimum:.5,default:8}, lightningMinStrikes:{title:'Minimum recent strikes for proximity warning',type:'integer',minimum:1,default:2}, lightningNotificationPath:{title:'Lightning Signal K notification path',type:'string',default:DEFAULTS.lightningNotificationPath},
     onboardEnvironmentEnabled:{title:'Fuse onboard environmental sensors',type:'boolean',default:true}, onboardEnvironmentHistoryMinutes:{title:'Onboard environment trend window (minutes)',type:'integer',minimum:5,maximum:180,default:30}, onboardEnvironmentMaxAgeSeconds:{title:'Maximum onboard sample age (seconds)',type:'integer',minimum:10,maximum:3600,default:180}, onboardEnvironmentEvidenceWeight:{title:'Maximum onboard evidence confidence contribution',type:'number',minimum:0,maximum:.3,default:.12},
@@ -1636,7 +1729,7 @@ module.exports = function (app) {
     minZoom: { type: 'integer', minimum: 0, maximum: 22, default: 4 }, maxZoom: { type: 'integer', minimum: 0, maximum: 22, default: 13 }, cacheSeconds: { type: 'integer', minimum: 0, maximum: 3600, default: 60 }, cacheEntries: { type: 'integer', minimum: 16, maximum: 10000, default: 512 }, requestTimeoutMs: { type: 'integer', minimum: 1000, maximum: 60000, default: 10000 }
   } })
 
-  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, authoritativeV3InferenceComponents, config: () => cfg, processDevelopmentCandidates, processStorm, processStormV3, processNormalizedRadarStormV3, severityLevel, operationalRisk, operationalCell, stormMessage, isOperationalApproachingCell, refreshStormThreat, cells:()=>cells, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
+  plugin._test = { ADAPTERS, OBSERVATION_ADAPTERS, INFERENCE_ALGORITHMS, lightningChartRecord, lightningDensityChartRecords, lightningDensityChartId, KNOWN_PRODUCTS, tileBBox3857, normalizeTime, chartRecord, chartRecords, extensionManifest, splitTarget, parseTargets, DEFAULTS, tilesAroundPosition, playbackSlots, resolveSlot, playbackChartId, playbackChartName, hazardChartId, hazardChartName, hazardChartRecords, radarEchoStructureChartId, radarEchoStructureChartRecord, developmentCandidateChartId, developmentCandidateChartRecord, geometryBounds, authoritativeV3InferenceComponents, config: () => cfg, processDevelopmentCandidates, processStorm, processStormV3, processNormalizedRadarStormV3, severityLevel, operationalRisk, operationalCell, stormMessage, isOperationalApproachingCell, refreshStormThreat, cells:()=>cells, activeStormSource:()=>activeStormSource, stormRuntimeV3:()=>stormRuntimeV3, refreshActiveStormSource, acquireOne, acquireCycle, scheduledAcquisitionCycle, lightningCycle, prefetchCycle, activeErrors, timers:()=>({timer,startupTimer,busy}) }
   return plugin
 }
 

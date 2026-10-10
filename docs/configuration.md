@@ -20,6 +20,10 @@ Configuring a provider-qualified layer/target can implicitly require that provid
 
 Radar-DPC keeps its REST, v2 WebP tile, legacy WMS and HRD binary-product endpoints in the adapter-owned `providerSettings.radar-dpc` namespace. VMI, SRI and accumulated-rain overlays use immutable, time-qualified Radar-DPC v2 WebP data tiles and are decoded into the normalized PNG chart contract with provider-owned palettes. They do not silently fall back to the legacy WMS because the legacy and v2 rendering pipelines may publish different pixels for the same timestamp. Products not published through the documented v2 tile client retain their existing WMS transport inside the adapter. HRD discovery uses the latest VMI observation only as a bounded time index, then verifies the exact HRD object before reporting that timestamp; unavailable frames are not silently substituted.
 
+`stormSources` is an ordered, unique array of provider-qualified storm sources. The default contains the legacy default source; an existing `stormSource` migrates to a one-element array when `stormSources` is absent. Invalid targets are filtered, duplicates removed, and required providers enabled. `stormSource` remains a compatibility alias for the first configured source. Add standby sources to `acquisitionTargets` to keep their inputs warm.
+
+One source is authoritative at a time. At each acquisition cycle, selection uses adapter product bounds and the vessel position projected over `horizonMinutes` using Signal K SOG (m/s) and true COG (radians). The active source stays selected while both positions are covered; otherwise selection prefers the first source covering both, then the first covering the current position. Missing projection uses the current position. If no source covers it, the runtime currently retains its selected source; this is not evidence of radar coverage. Rectangular product bounds do not establish radar quality. A source change preserves the V3 runtime/tracker but clears its previous motion frame: the first new-source frame has unknown motion, and later motion requires supported source-local evidence. Inactive configured sources do not advance either storm engine.
+
 ## 3. Background acquisition
 
 Important controls include acquisition enablement/poll interval and archive retention by maximum age/bytes. Raw acquisition is capability-dependent; WMS-only providers are not treated as raw-download providers.
@@ -112,3 +116,30 @@ Do not commit secrets or place them in exported benchmark configurations. Resear
 Published/replayed experiments must archive the complete non-secret resolved configuration, not merely the differences from defaults. Defaults can change between releases.
 
 Include plugin version/Git commit so a future researcher can reconstruct the same schema/default behavior.
+
+## Normalized radar hazard decomposition
+
+Operational V3 hazards use connected reflectivity bodies and qualified cores independently of the filtered development-candidate list. `hazardBodyReflectivityDbz` defaults to 30 dBZ and `hazardSeedReflectivityDbz` to 36 dBZ (both bounded to −20 through 80 dBZ). `hazardMinSeedAreaKm2` and `hazardMinRegionAreaKm2` default to 25 km² (bounded to 0 through 1,000,000 km²). Persisted non-finite values use defaults. Core support must also meet the body threshold. Multiple qualified cores partition a body by deterministic eight-neighbour breadth-first expansion; small resulting regions are suppressed. Bodies without qualified cores cannot become hazards. Reflectivity fractions retain their fixed 30/36/42 dBZ meanings when thresholds change. These thresholds are operational heuristics, not calibrated storm probabilities.
+
+## DPC VMI with Storm Runtime V3
+
+Select `radar-dpc:VMI` as the authoritative storm source and include it in acquisition:
+
+```json
+{
+  "stormSources": ["radar-dpc:VMI", "aemet:COMPO", "ipma:PCR"],
+  "acquisitionTargets": ["radar-dpc:VMI", "aemet:COMPO", "ipma:PCR"],
+  "providerSettings": {
+    "radar-dpc": {
+      "vmiGridWidth": 600,
+      "vmiGridHeight": 700,
+      "vmiMaxInputPixels": 4000000,
+      "vmiMaxRawBytes": 33554432
+    }
+  }
+}
+```
+
+Source order and vessel coverage determine which source is authoritative. Existing default/explicit HRD settings remain on the legacy path; enabling VMI is an explicit configuration choice. Map overlays continue to use the existing time-qualified WebP rendering path, while V3 acquires the native GeoTIFF. `radar-dpc:VMI` uses the same hazard-region, source-local motion, tracking, severity and forecast pipeline as AEMET COMPO and IPMA PCR.
+
+DPC-owned grid dimensions are integers from 32 through 1600 pixels; maximum native raster size is 1 through 16,000,000 pixels; maximum download size is 1024 through 134,217,728 bytes. Defaults appear above. Partial provider settings merge with adapter defaults; invalid non-finite values use defaults and finite persisted values are clamped. Grid settings change spatial resolution and hazard/motion results; choose them before freezing an experiment. No-data and unsupported reflectivity samples remain unknown, including for motion. See [DPC VMI normalization](dpc-vmi-normalization.md) for scientific semantics and upstream documentation.

@@ -69,3 +69,5 @@ The browser polls the read-only operational endpoint every 10 seconds and refres
 ## Security
 
 The operational view includes vessel-relative ranges and may expose vessel position. Enabling unauthenticated Signal K readonly access can therefore expose operational information to anyone who can reach the server. Follow the server security policy for the vessel/network environment.
+
+V3 inference components display the last processed observation timestamp in UTC from `processedAt`. This is the observation time, not the wall-clock completion time. Legacy components retain `lastRun` success/failure diagnostics. Components with no processing metadata display waiting; disabled components display disabled.
